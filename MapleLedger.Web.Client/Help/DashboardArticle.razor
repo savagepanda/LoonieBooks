@@ -1,0 +1,118 @@
+﻿<div class="help-article">
+    <p class="help-lead">
+        The <a href="./">Dashboard</a> is the summary: what came in, what went out, what's left over and what you're worth, then
+        where it went, by month and by category. Click anything to see the transactions behind it.
+    </p>
+    <HelpClip Name="dashboard-drilldown" Caption="Clicking a month, then a category and its details." />
+
+    <h3>Choosing what it covers</h3>
+    <ul>
+        <li><strong>Period</strong> (top right): this month, last month, the last 3 or 12 months, year to date, or last year.</li>
+        <li><strong>Accounts</strong>: with more than one account, tick the ones to include. None ticked means all of them. The choice is
+            remembered.</li>
+        <li><strong>Tags</strong>: pick tags to see only those transactions, such as <em>Rental</em> for a rental property's income and
+            costs. See <a href="help?a=tags">Tags</a>.</li>
+    </ul>
+
+    <h3>The four numbers</h3>
+    <ul>
+        <li><strong>Income</strong>: money in, other than transfers and refunds.</li>
+        <li><strong>Spending</strong>: money out, less refunds. Transfers between your accounts and credit card payments are left out, so
+            a purchase isn't counted once on the card and again when you pay the card.</li>
+        <li><strong>Net cash flow</strong>: income minus spending, with the share of income you kept (your savings rate).</li>
+        <li><strong>Net worth</strong>: what your accounts hold, plus your properties' estimated values, minus what you owe on cards,
+            lines of credit and loans, from each account's current balance. It always covers every account, whatever tags are
+            picked. With accounts picked, a property counts when one of its loans is among them.</li>
+    </ul>
+    <p>
+        With investment holdings, a line under the totals says when their prices were last updated from stocktreemap.com (the
+        time of stocktreemap's prices, and when LoonieBooks last checked) and how many holdings were updated. A yellow note lists
+        any that weren't, with the reason: a mutual fund code, a symbol the price list doesn't carry, a price that doesn't look
+        right for the holding, or one stocktreemap hasn't updated for days. Those holdings keep their statement's value.
+        <span class="help-ui">Dismiss</span> hides the note until the list changes. See
+        <a href="help?a=holdings">Holdings</a> for how prices are matched.
+    </p>
+
+    <h3>By month</h3>
+    <p>
+        The chart shows income against spending for each month. Click a month to list its transactions in the panel on the
+        right; click it again, or the month's × button above the list, to clear it.
+    </p>
+    <p>
+        The <span class="help-ui">‹</span> and <span class="help-ui">›</span> buttons on either side of the chart (or a swipe
+        across it, on a phone) switch to <strong>Net worth by month</strong>: your net worth at the end of each month, with how
+        much it went up or down over the period beside the title. Hover over a month for what's in it, or click it to list its
+        transactions, as on the other chart. The chart you picked is remembered.
+    </p>
+    <p>
+        LoonieBooks keeps only each account's latest balance, so earlier months are worked back from it: an account's balance at
+        the end of a month is its current balance less what its transactions added since (up to the date the balance was set).
+        That makes it an estimate. Investments change with their transactions and, for listed stocks and ETFs in their holdings,
+        with each listing's price at the end of the month from stocktreemap.com (the holdings count as held in the same
+        quantities throughout); other holdings, such as mutual funds and GICs, change only with their transactions. Only the
+        months the chart shows are downloaded, each once, and nothing about your holdings is sent.
+        Foreign-currency accounts are converted at today's rates; and each property counts at its value carried to that month by
+        its area's house price index (backwards too, before the month its value is from), or as entered without one.
+        A closed account counts what it held before its last transactions. Like the Net worth number, it follows the accounts
+        you picked but not tags, and its last month matches that number.
+    </p>
+    <p>
+        One more step switches to <strong>Account value by month</strong>: one account's balance at the end of each month, in
+        the account's own currency. Pick the account from the list beside the title (it offers the accounts the dashboard
+        covers), or turn the mouse wheel over the chart to step through them; the one you picked is remembered. It's worked back the same way as net worth, and an investment account moves
+        with its listings' month-end prices too: then the change beside the title says <em>estimated</em> (hover over it for
+        how), since it's not your broker's figures. For a loan, line of credit or card, the line is what's owed. An account
+        without a balance has nothing to work back from: set its balance on the <a href="accounts">Accounts</a> page first.
+    </p>
+
+    <h3>By category or account, and your holdings</h3>
+    <ul>
+        <li>The buttons at the top left of the card pick what it lists: <strong>Spending</strong> or <strong>Income</strong> ranks the
+            period's categories, <strong>Assets</strong> ranks your investment holdings by market value and your real estate by
+            estimated value, and <strong>Liabilities</strong> ranks what you owe. Bars or Pie, at the bottom
+            left, switches the list between bars and a pie chart. These choices are remembered.</li>
+        <li>The list's total is at the bottom right: the period's spending or income (and the month, when you've picked one), or
+            what your assets are worth and what you owe, in Canadian dollars. Hover over it for what it counts.</li>
+        <li><strong>By category</strong> or <strong>By account</strong>, at the top right, picks how Spending and Income are added
+            up: by category, or by the account the money came in to or went out of (your credit card, your chequing account…).
+            Refunds reduce spending on the account they came back to, and transfers between your accounts are left out. Accounts
+            aren't clickable; to see one account's transactions, pick it under <strong>Accounts</strong>. Amounts are added up as
+            recorded, in each account's own currency.</li>
+        <li><strong>Assets</strong> values your investment holdings in Canadian dollars, from each account's latest import on
+            <a href="holdings">Holdings</a>. <strong>By holding</strong> adds up each holding (by symbol) across your accounts;
+            <strong>By account</strong> adds up each account's holdings instead (the same button as for Spending and Income). It follows the accounts you picked, but not the
+            period or tags: it's where things stand now, like net worth.</li>
+        <li><strong>Liabilities</strong> ranks what you owe. <strong>By property</strong> adds up the loans secured by each property
+            (with the loans as its details), and puts cards and other unsecured debts under <em>Not secured by a property</em>;
+            <strong>By account</strong> lists each loan, line of credit and card. Balances are in Canadian dollars, as last set on each
+            account on <a href="accounts">Accounts</a>. A balance in your favour (a credit on a line or card) isn't shown as a bar
+            but lowers what's owed.</li>
+        <li>Under <strong>Assets</strong>, your properties are one more row, <strong>Real estate</strong>, at their estimated values
+            (carried forward by their areas' house price index), with each property as its details. Click a property there to see in
+            the panel how its value was worked out, the loans
+            secured by it, its equity and its loan-to-value. Properties are kept on
+            <a href="accounts">Accounts</a>.</li>
+        <li>Click a holding (By holding) and the panel on the right shows where it's held instead of transactions: each account
+            that holds it, with the units, price, market value, book value and gain there, and its share of the holding and of
+            the account. Click an account's name to open it on <a href="holdings">Holdings</a>.</li>
+        <li>Click an account (By account) to open its holdings beneath it, like a category's details (as a pie, they get a
+            second, smaller pie), and list them in the panel with their figures. Click a holding there, or under the account,
+            to see where else it's held.</li>
+        <li>Click a category to list its transactions and open its details (Food &amp; Dining › Groceries, Restaurants…) beneath
+            it; click a detail to narrow further. The arrow beside a category opens or closes its details without
+            selecting it. One category is open at a time.</li>
+        <li>As a pie, the open category gets a second, smaller pie under the first, showing how it divides into its details,
+            each in a colour of its own (the largest keeps the category's colour). Click a slice there to pick that detail.</li>
+        <li>Pick a category before a month and the chart switches to that category, month by month.</li>
+        <li>Deposits nobody has categorised count as income until you file them as Salary, Business Income or Other Income.</li>
+    </ul>
+
+    <h3>The transaction panel</h3>
+    <p>
+        Shows the latest transactions, or those for the month and category you clicked. You can change a category or add a tag
+        right there. A transaction that no longer fits stays in place until you press ↻; <span class="help-ui">See full list →</span>
+        opens the same selection on <a href="transactions">Transactions</a>. With a holding or an investment account picked under
+        <strong>Assets</strong>, or a property under its <strong>Real estate</strong> row, it shows that instead; its × button, or clicking a
+        month, brings the transactions back.
+    </p>
+</div>

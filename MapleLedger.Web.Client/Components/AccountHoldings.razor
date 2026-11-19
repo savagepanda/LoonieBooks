@@ -1,0 +1,93 @@
+@using System.Globalization
+@using MapleLedger.Core.Investments
+
+@* The dashboard panel's view of one investment account (picked from Assets, by account): its totals,
+   then each holding, largest first. Clicking a holding shows where it's held. Values in Canadian
+   dollars, with the original amount beside any in another currency. *@
+<div class="holding-details">
+    <div class="mb-2">
+        <h3 class="h5 mb-0"><a href="@($"holdings?accountId={Uri.EscapeDataString(AccountId)}")" title="This account's holdings">@Name</a></h3>
+        <div class="small text-body-secondary">@(Institution is { Length: > 0 } institution ? $"{institution} · " : "")as of @Display.Date(AsOf)</div>
+    </div>
+
+    <dl class="holding-summary small mb-3">
+        <div><dt>Market value</dt><dd>@Money.Format(_total)</dd></div>
+        @if (Holdings.Any(h => h.BookValue is not null))
+        {
+            var book = Holdings.Sum(h => h.BookValueCad ?? 0);
+            var gain = Holdings.Sum(h => h.GainCad ?? 0);
+            <div><dt>Book value</dt><dd>@Money.Format(book)</dd></div>
+            <div><dt>Gain</dt><dd class="@(gain < 0 ? "text-danger" : "")">@Money.FormatSigned(gain)@(book > 0 ? $" ({Percent(gain / book)})" : "")</dd></div>
+        }
+    </dl>
+
+    <h4 class="h6">@(Holdings.Count == 1 ? "1 holding" : $"{Holdings.Count} holdings")</h4>
+    <ul class="list-unstyled mb-2">
+        @foreach (var h in Holdings.OrderByDescending(h => h.MarketValueCad))
+        {
+            var foreign = h.Currency != Holding.Cad;
+            <li>
+                <button type="button" class="holding-place holding-pick" title="Where @h.Label is held" @onclick="() => OnSelect.InvokeAsync(h.Label)">
+                    <span class="d-flex gap-2 align-items-baseline">
+                        <span class="fw-semibold text-truncate">@h.Label</span>
+                        <span class="ms-auto fw-semibold text-nowrap">@Money.Format(h.MarketValueCad)</span>
+                    </span>
+                    @if (h.Symbol is not null && h.Description is not null)
+                    {
+                        <span class="d-block small text-body-secondary text-truncate">@h.Description</span>
+                    }
+                    <span class="small text-body-secondary d-flex gap-2">
+                        <span>@Line(h)</span>
+                        @if (foreign)
+                        {
+                            <span class="ms-auto text-nowrap">@Money.Format(h.MarketValue, h.Currency)</span>
+                        }
+                    </span>
+                    @if (h.BookValueCad is { } bookCad)
+                    {
+                        <span class="d-block small">
+                            Book @Money.Format(bookCad) ·
+                            <span class="@(h.GainCad < 0 ? "text-danger" : "")">@Money.FormatSigned(h.GainCad!.Value)@(bookCad > 0 ? $" ({Percent(h.GainCad.Value / bookCad)})" : "")</span>
+                        </span>
+                    }
+                </button>
+            </li>
+        }
+    </ul>
+    <p class="small text-body-secondary mb-0">
+        From the account's latest import. Book value and gains are as your broker reports them, for keeping track; they
+        aren't adjusted cost base and aren't tax or investment advice.
+    </p>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string AccountId { get; set; } = "";
+
+    [Parameter, EditorRequired] public string Name { get; set; } = "";
+
+    [Parameter] public string? Institution { get; set; }
+
+    [Parameter, EditorRequired] public DateOnly AsOf { get; set; }
+
+    [Parameter, EditorRequired] public IReadOnlyList<Holding> Holdings { get; set; } = [];
+
+    /// <summary>A holding was clicked: its label.</summary>
+    [Parameter] public EventCallback<string> OnSelect { get; set; }
+
+    private decimal _total;
+
+    protected override void OnParametersSet() => _total = Holdings.Sum(h => h.MarketValueCad);
+
+    /// <summary>Units and price, and the holding's share of the account.</summary>
+    private string Line(Holding h)
+    {
+        var parts = new List<string>();
+        if (h.Quantity is { } q) parts.Add(HoldingDetails.Units(h, q));
+        if (_total > 0) parts.Add($"{Percent(h.MarketValueCad / _total)} of the account");
+        return string.Join(" · ", parts);
+    }
+
+    private static string Number(decimal value) => value.ToString("#,0.####", CultureInfo.InvariantCulture);
+
+    private static string Percent(decimal share) => share.ToString("0.0%", CultureInfo.InvariantCulture);
+}

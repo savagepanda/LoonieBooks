@@ -1,0 +1,161 @@
+@* Finds the 12-month window ending in the tax year with the most medical expenses, and estimates the claim. *@
+@inject ILedgerStore Store
+
+<details class="border rounded p-2 mt-2">
+    <summary class="fw-semibold">12-month window and threshold</summary>
+    <p class="small text-body-secondary mt-2 mb-2">
+        You can claim medical expenses paid in any 12-month period ending in @Year, but only the part above the lesser of 3% of
+        your net income or @(Threshold is { } t ? Money.Format(t) : "the CRA's annual amount"). This helper checks every window
+        and estimates the claim from confirmed expenses. It's an estimate, not tax advice.
+    </p>
+    <div class="d-flex flex-wrap align-items-end gap-2">
+        <div>
+            <label class="form-label small mb-0" for="net-income-@Year">Net income, line 23600 (optional)</label>
+            <input id="net-income-@Year" type="number" min="0" step="1" inputmode="decimal" class="form-control form-control-sm" @bind="_netIncome" />
+        </div>
+        <button class="btn btn-sm btn-outline-primary" @onclick="EstimateAsync" disabled="@_busy">@(_estimate is null ? "Find the best window" : "Recalculate")</button>
+    </div>
+
+    @if (_error is not null)
+    {
+        <div class="small text-danger mt-2">@_error</div>
+    }
+
+    @if (_estimate is { } e)
+    {
+        <div class="mt-2">
+            <div>
+                Best window: <strong>@Display.Date(e.Best.Start) – @Display.Date(e.Best.End)</strong>,
+                @Money.Format(e.Best.Total) in @e.Best.Count expense(s)
+                @if (e.Best.IsCalendarYear)
+                {
+                    <span class="small text-body-secondary">(the calendar year)</span>
+                }
+            </div>
+
+            @if (e.Current is { } current && current.EndMonth == e.Best.EndMonth)
+            {
+                <div class="small text-success">Your @Year report already claims this window.</div>
+            }
+            else
+            {
+                <div class="small text-body-secondary">
+                    @(e.Current is { } c ? $"Your {Year} report currently claims {Display.Date(c.Start)} – {Display.Date(c.End)}: {Money.Format(c.Total)}." : $"Your {Year} report currently claims a mix of periods.")
+                </div>
+                @if (e.UsesPreviousYear)
+                {
+                    <div class="small text-warning-emphasis">
+                        This window includes expenses paid in @(Year - 1). Only use it if you didn't claim them on your @(Year - 1) return;
+                        LoonieBooks will take them out of the @(Year - 1) report.
+                    </div>
+                }
+                @if (e.Best.Total > (e.Current?.Total ?? 0))
+                {
+                    <button class="btn btn-sm btn-primary mt-1" @onclick="() => ApplyAsync(e.Best.EndMonth)" disabled="@_busy">Claim this window for @Year</button>
+                }
+                @if (e.Current is null && e.Windows[11] is { } calendar)
+                {
+                    <button class="btn btn-sm btn-link mt-1" @onclick="() => ApplyAsync(calendar.EndMonth)" disabled="@_busy">Use the calendar year</button>
+                }
+            }
+
+            <div class="mt-2">
+                @if (e.Threshold is null)
+                {
+                    <span class="small">LoonieBooks doesn't know the @Year threshold yet; check the CRA's amount.</span>
+                }
+                else if (e.AppliedThreshold is null)
+                {
+                    <span class="small">Enter your net income to estimate the claimable amount.</span>
+                }
+                else
+                {
+                    <span class="small">
+                        Threshold: the lesser of 3% of @Money.Format(e.NetIncome!.Value) and @Money.Format(e.Threshold.Value) is
+                        @Money.Format(e.AppliedThreshold.Value).
+                    </span>
+                    <div>Estimated claim: <strong>@Money.Format(e.EstimatedClaim!.Value)</strong> <span class="small text-body-secondary">(estimate)</span></div>
+                }
+            </div>
+
+            <details class="mt-2">
+                <summary class="small">All 12 windows</summary>
+                <table class="table table-sm mb-0 mt-1">
+                    <tbody>
+                        @foreach (var w in e.Windows.AsEnumerable().Reverse())
+                        {
+                            <tr class="@(w.EndMonth == e.Best.EndMonth ? "table-success" : "")">
+                                <td class="small">@Display.Month(w.Start.Year, w.Start.Month) – @Display.Month(w.End.Year, w.End.Month)</td>
+                                <td class="small text-end">@Money.Format(w.Total)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </details>
+        </div>
+    }
+</details>
+
+@code {
+    [Parameter, EditorRequired] public int Year { get; set; }
+
+    /// <summary>Whose medical claims, as on the tax report; null for everyone's.</summary>
+    [Parameter] public string? Person { get; set; }
+
+    /// <summary>Raised after expenses move between years, so the report can reload.</summary>
+    [Parameter] public EventCallback Changed { get; set; }
+
+    private decimal? _netIncome;
+    private MedicalEstimate? _estimate;
+    private bool _busy;
+    private string? _error;
+    private (int Year, string? Person) _loadedFor;
+
+    private decimal? Threshold => TaxYearAmounts.MedicalExpenseThreshold(Year);
+
+    protected override void OnParametersSet()
+    {
+        if (_loadedFor != (Year, Person))
+        {
+            (_loadedFor, _estimate, _error) = ((Year, Person), null, null);
+        }
+    }
+
+    private async Task EstimateAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            _estimate = await Store.GetMedicalEstimateAsync(Year, _netIncome, Person);
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ApplyAsync(int endMonth)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            await Store.ApplyMedicalWindowAsync(Year, endMonth, Person);
+            _estimate = await Store.GetMedicalEstimateAsync(Year, _netIncome, Person);
+            await Changed.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

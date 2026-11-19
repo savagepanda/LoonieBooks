@@ -1,0 +1,16 @@
+@MapleLedger.ApiService_HostAddress = https://localhost:7593
+
+GET {{MapleLedger.ApiService_HostAddress}}/fdx/v6/accounts
+Accept: application/json
+
+###
+
+GET {{MapleLedger.ApiService_HostAddress}}/api/reports/dashboard?from=2026-01-01&to=2026-12-31
+Accept: application/json
+
+###
+
+GET {{MapleLedger.ApiService_HostAddress}}/api/reports/tax/2026
+Accept: application/json
+
+###

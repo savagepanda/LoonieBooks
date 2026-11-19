@@ -1,0 +1,675 @@
+@page "/receipts/scan"
+@implements IAsyncDisposable
+@inject ILedgerStore Store
+@inject Camera Camera
+@inject ReceiptOcr Ocr
+@inject CloudReceiptReader Cloud
+@inject IJSRuntime JS
+@using MapleLedger.Core.Receipts
+
+<PageTitle>Scan a receipt · LoonieBooks</PageTitle>
+
+<h1 class="h3 mb-1">Scan a receipt</h1>
+<p class="small text-body-secondary">
+    Start with the receipt: photograph it with your camera, or choose a photo or PDF. LoonieBooks reads the total, date and
+    store in this browser (the photo isn't sent anywhere to be read), looks up the transaction it belongs to, and attaches it there. Photos
+    are stored with your ledger (@(Store.Location == StorageLocation.Cloud ? "on this server" : "in this browser")),
+    like receipts attached from the tax report.
+</p>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+@if (_success is not null)
+{
+    <div class="alert alert-success">@_success</div>
+}
+
+<div class="row g-3">
+    <div class="col-lg-5">
+        <div class="card">
+            <div class="card-body">
+                <h2 class="h6">1. The receipt</h2>
+
+                <div class="receipt-camera mb-2 @(_cameraOn ? "" : "d-none")">
+                    <video @ref="_video" playsinline muted aria-label="Camera preview"></video>
+                    <div class="small text-body-secondary mt-1">@_resolution · Fill the frame with the receipt, flat and well lit.</div>
+                </div>
+
+                @if (_photo is not null && !_cameraOn)
+                {
+                    <div class="mb-2">
+                        @if (_photoType == "application/pdf")
+                        {
+                            <div class="border rounded p-3 small">📄 @_photoName (PDF, @Size(_photo.Length))</div>
+                        }
+                        else
+                        {
+                            <img class="receipt-preview border rounded" src="@($"data:{_photoType};base64,{Convert.ToBase64String(_photo)}")" alt="The receipt photo" />
+                            <div class="small text-body-secondary">@_photoName · @Size(_photo.Length)</div>
+                        }
+                    </div>
+                }
+
+                <div class="d-flex flex-wrap gap-2">
+                    @if (_cameraOn)
+                    {
+                        <button class="btn btn-primary" @onclick="CaptureAsync" disabled="@_busy">Take photo</button>
+                        <button class="btn btn-outline-secondary" @onclick="StopCameraAsync">Stop camera</button>
+                    }
+                    else
+                    {
+                        <button class="btn btn-primary" @onclick="StartCameraAsync" disabled="@_busy">@(_photo is null ? "Use camera" : "Retake with camera")</button>
+                        <label class="btn btn-outline-primary mb-0 @(_busy ? "disabled" : "")">
+                            Choose photo or PDF
+                            <InputFile class="d-none" accept="image/*,application/pdf" capture="environment" OnChange="ChooseFileAsync" />
+                        </label>
+                        @if (SiteInfo.HasWebHost)
+                        {
+                            <button class="btn btn-outline-primary" @onclick="StartRelayAsync" disabled="@(_busy || _phone?.IsWaiting == true)">Send from phone</button>
+                        }
+                    }
+                </div>
+
+                <PhoneRelayPanel @ref="_phone" OnReceived="PhotoFromPhone" OnError="ShowError" OnCancelled="StateHasChanged" />
+
+                @if (_photo is not null && !_cameraOn)
+                {
+                    <div class="border-top mt-3 pt-3">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <h3 class="h6 mb-0">What it says</h3>
+                            @if (!_reading)
+                            {
+                                <span class="d-flex gap-3">
+                                    @if (CanRead)
+                                    {
+                                        <button class="btn btn-sm btn-link p-0" @onclick="ReadAsync">@(_rawText is null ? "Read it" : "Read again")</button>
+                                    }
+                                    @if (_cloudAvailable && CloudReceiptReader.CanRead(_photoType))
+                                    {
+                                        <button class="btn btn-sm btn-link p-0" @onclick="ReadWithClaudeAsync" title="Sends this photo to Anthropic's API to read it">Read with Claude</button>
+                                    }
+                                </span>
+                            }
+                        </div>
+
+                        @if (_reading)
+                        {
+                            <div class="small text-body-secondary mt-2">@_progressText</div>
+                            <div class="progress mt-1" role="progressbar" aria-label="Reading the receipt" aria-valuenow="@((int)(_progressValue * 100))" aria-valuemin="0" aria-valuemax="100">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: @(((int)(_progressValue * 100)).ToString(System.Globalization.CultureInfo.InvariantCulture))%"></div>
+                            </div>
+                        }
+                        else
+                        {
+                            @if (_readNote is not null)
+                            {
+                                <div class="small text-body-secondary mt-1">@_readNote</div>
+                            }
+                            <div class="row g-2 mt-1">
+                                <div class="col-4">
+                                    <label class="form-label small mb-0" for="rc-total">Total</label>
+                                    <input id="rc-total" type="number" step="0.01" min="0" class="form-control form-control-sm" @bind="_total" @bind:after="FindMatchesAsync" />
+                                </div>
+                                <div class="col-8">
+                                    <label class="form-label small mb-0" for="rc-date">Date</label>
+                                    <input id="rc-date" type="date" class="form-control form-control-sm" value="@(_date is { } d ? Display.Iso(d) : "")" @onchange="SetReceiptDateAsync" />
+                                    @if (_otherDate is { } other)
+                                    {
+                                        <div class="small text-body-secondary">
+                                            Or @Display.Date(other)? ·
+                                            <button class="btn btn-sm btn-link p-0 align-baseline" @onclick="SwapDates">use that</button>
+                                        </div>
+                                    }
+                                </div>
+                                <div class="col-12">
+                                    <label class="form-label small mb-0" for="rc-merchant">Store</label>
+                                    <input id="rc-merchant" class="form-control form-control-sm" maxlength="80" @bind="_merchant" @bind:after="FindMatchesAsync" />
+                                </div>
+                            </div>
+                            <div class="small text-body-secondary mt-1">Correct anything it got wrong; the matches update.</div>
+                            @if (!string.IsNullOrWhiteSpace(_rawText))
+                            {
+                                <details class="mt-2">
+                                    <summary class="small">Text found on the receipt</summary>
+                                    <pre class="small receipt-text mb-0">@_rawText</pre>
+                                </details>
+                            }
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    @if (_photo is not null && !_cameraOn)
+    {
+    <div class="col-lg-7">
+        <div class="card">
+            <div class="card-body">
+                <h2 class="h6">2. The transaction it belongs to</h2>
+
+                @if (_reading)
+                {
+                    <p class="small text-body-secondary mb-0">Reading the receipt… the transaction it matches will show here.</p>
+                }
+                else if (_matches is null)
+                {
+                    <p class="small text-body-secondary">Type the total and date on the left to find it, or search your transactions.</p>
+                }
+                else if (_matches.Count == 0)
+                {
+                    <p class="small text-body-secondary">No spending fits what the receipt says. Correct the total and date on the left, or search below.</p>
+                }
+                else
+                {
+                    <div class="small text-body-secondary mb-1">
+                        @(_selected is not null && _matches.Any(m => IsSelected(m.Item))
+                            ? "This looks like the one. Pick another if it isn't."
+                            : _matches.Count == 1 ? "Closest match:" : "Closest matches:")
+                    </div>
+                    <div class="list-group mb-2">
+                        @foreach (var match in _matches)
+                        {
+                            var t = match.Item.Transaction;
+                            var chosen = IsSelected(match.Item);
+                            <button type="button" class="list-group-item list-group-item-action @(chosen ? "active" : "")" @onclick="() => Select(match.Item)" aria-pressed="@(chosen ? "true" : "false")">
+                                <div class="d-flex justify-content-between gap-2">
+                                    <span>@t.Description</span>
+                                    <span class="text-nowrap"><AmountText Transaction="t" Currency="@_accounts.CurrencyOf(t.AccountId)" /></span>
+                                </div>
+                                <div class="small @(chosen ? "" : "text-body-secondary")">
+                                    @Display.Date(t.EffectiveDate) · @AccountName(t.AccountId) · @string.Join(", ", match.Reasons)
+                                </div>
+                            </button>
+                        }
+                    </div>
+                }
+
+                @if (!_reading && !ShowSearch)
+                {
+                    <button class="btn btn-sm btn-link p-0" @onclick="OpenSearchAsync">@(_matches is { Count: > 0 } ? "Not one of these? Search your transactions" : "Search your transactions")</button>
+                }
+
+                @if (!_reading && ShowSearch)
+                {
+                <div class="@(_matches is { Count: > 0 } ? "border-top mt-2 pt-2" : "")">
+                <div class="d-flex justify-content-between align-items-baseline mb-1">
+                    <div class="small fw-semibold">Search your transactions</div>
+                    @if (_matches is { Count: > 0 })
+                    {
+                        <button class="btn btn-sm btn-link p-0" @onclick="() => _searchOpen = false">Hide</button>
+                    }
+                </div>
+                <div class="row g-2 align-items-end mb-2">
+                    <div class="col-6 col-md-3">
+                        <label class="form-label small mb-0" for="scan-from">From</label>
+                        <input id="scan-from" type="date" class="form-control form-control-sm" value="@Display.Iso(_from)" @onchange="e => SetDate(e, isFrom: true)" />
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label small mb-0" for="scan-to">To</label>
+                        <input id="scan-to" type="date" class="form-control form-control-sm" value="@Display.Iso(_to)" @onchange="e => SetDate(e, isFrom: false)" />
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label small mb-0" for="scan-amount">Amount</label>
+                        <input id="scan-amount" type="number" step="0.01" min="0" class="form-control form-control-sm" placeholder="Any" @bind="_amount" @bind:after="ApplyFilter" />
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label small mb-0" for="scan-search">Description</label>
+                        <input id="scan-search" type="search" class="form-control form-control-sm" placeholder="e.g. Shoppers" value="@_search" @onchange="SetSearchAsync" />
+                    </div>
+                </div>
+
+                @if (_candidates is null)
+                {
+                    <p class="text-body-secondary small">Loading…</p>
+                }
+                else if (Shown.Count == 0)
+                {
+                    <p class="small text-body-secondary">No spending matches. Widen the dates or clear the amount.</p>
+                }
+                else
+                {
+                    <div class="table-responsive receipt-candidates">
+                        <table class="table table-sm table-hover align-middle mb-0">
+                            <tbody>
+                                @foreach (var item in Shown)
+                                {
+                                    var t = item.Transaction;
+                                    var selected = IsSelected(item);
+                                    <tr @key="(t.AccountId, t.TransactionId)" class="@(selected ? "table-primary" : "")" @onclick="() => Select(item)" role="button">
+                                        <td><input class="form-check-input" type="radio" name="receipt-target" checked="@selected" aria-label="Choose @t.Description" /></td>
+                                        <td class="text-nowrap small">@Display.Date(t.EffectiveDate)</td>
+                                        <td>
+                                            <div>@t.Description</div>
+                                            <div class="small text-body-secondary">@AccountName(t.AccountId)@(item.Tax is { Status: not TaxTagStatus.Rejected } tag ? $" · {TaxCategories.Find(tag.Code)?.Name}" : "")</div>
+                                        </td>
+                                        <td class="text-end text-nowrap"><AmountText Transaction="t" Currency="@_accounts.CurrencyOf(t.AccountId)" /></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+                </div>
+                }
+
+                @if (_selected is { } target && !_reading)
+                {
+                    <div class="border-top mt-3 pt-3">
+                        @if (target.Tax is not { Status: TaxTagStatus.Confirmed })
+                        {
+                            <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                                <label class="small" for="scan-tax">Also claim it as</label>
+                                <select id="scan-tax" class="form-select form-select-sm w-auto" @bind="_taxCode">
+                                    <option value="">(leave the tax treatment as it is)</option>
+                                    @foreach (var c in TaxCategories.All)
+                                    {
+                                        <option value="@c.Code">@c.Name</option>
+                                    }
+                                </select>
+                            </div>
+                        }
+                        <button class="btn btn-success" @onclick="AttachAsync" disabled="@_busy">
+                            Attach to @target.Transaction.Description
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+    }
+</div>
+
+@code {
+    private ElementReference _video;
+    private PhoneRelayPanel? _phone;
+    private bool _cameraOn, _busy;
+    private string? _resolution, _error, _success;
+
+    private byte[]? _photo;
+    private string _photoType = "image/jpeg";
+    private string _photoName = "receipt.jpg";
+
+    private bool _reading;
+    private string? _progressText, _readNote, _rawText, _merchant;
+    private double _progressValue;
+    private decimal? _total;
+    private DateOnly? _date, _otherDate;
+    private IReadOnlyList<ReceiptMatch>? _matches;
+
+    private bool CanRead => _photo is not null && (_photoType == "application/pdf" || ReceiptOcr.CanRead(_photoType));
+
+    /// <summary>Premium users on a server with an Anthropic key can also have Claude read a receipt.</summary>
+    private bool _cloudAvailable;
+
+    private DateOnly _from, _to;
+    private decimal? _amount;
+    private string? _search, _taxCode;
+    private IReadOnlyList<Account> _accounts = [];
+    private List<LedgerTransaction>? _candidates;
+    private LedgerTransaction? _selected;
+    private bool _searchOpen;
+
+    /// <summary>The search is opened by hand when there are suggestions, and shown straight away when there are none.</summary>
+    private bool ShowSearch => _searchOpen || _matches is not { Count: > 0 };
+
+    /// <summary>Spending only, narrowed by the amount filter (amounts are compared in memory).</summary>
+    private List<LedgerTransaction> Shown => (_candidates ?? [])
+        .Where(t => t.Transaction.DebitCreditMemo == DebitCreditMemo.Debit)
+        .Where(t => _amount is not { } a || Math.Abs(t.Transaction.Amount - a) < 0.005m)
+        .ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _to = Periods.Today;
+        _from = _to.AddDays(-60);
+        _cloudAvailable = await Cloud.IsAvailableAsync();
+        try
+        {
+            _accounts = await Store.GetAccountsAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load accounts: {ex.Message}";
+        }
+    }
+
+    private Task OpenSearchAsync()
+    {
+        _searchOpen = true;
+        return _candidates is null ? LoadCandidatesAsync() : Task.CompletedTask;
+    }
+
+    private async Task LoadCandidatesAsync()
+    {
+        try
+        {
+            _candidates = [.. await Store.SearchTransactionsAsync(new TransactionFilter(_from, _to, Search: _search, Limit: 500))];
+            // A suggested match stays chosen even when the search shows other dates.
+            if (_selected is not null && !_candidates.Any(IsSelected) && _matches?.Any(m => IsSelected(m.Item)) != true) _selected = null;
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load transactions: {ex.Message}";
+        }
+    }
+
+    private bool IsSelected(LedgerTransaction item) =>
+        _selected is { } s && s.Transaction.AccountId == item.Transaction.AccountId && s.Transaction.TransactionId == item.Transaction.TransactionId;
+
+    private Task SetDate(ChangeEventArgs e, bool isFrom)
+    {
+        if (!Display.TryParseIso((string?)e.Value, out var date)) return Task.CompletedTask;
+        if (isFrom) _from = date; else _to = date;
+        return LoadCandidatesAsync();
+    }
+
+    private Task SetSearchAsync(ChangeEventArgs e)
+    {
+        _search = string.IsNullOrWhiteSpace((string?)e.Value) ? null : ((string)e.Value!).Trim();
+        return LoadCandidatesAsync();
+    }
+
+    private void Select(LedgerTransaction item) => _selected = item;
+
+    private void ApplyFilter()
+    {
+        if (_selected is not null && !Shown.Any(IsSelected)) _selected = null;
+    }
+
+    // ---------------------------------------------------------------- the photo
+
+    private async Task StartCameraAsync()
+    {
+        _error = _success = null;
+        _cameraOn = true; // the <video> must be visible before the stream attaches
+        StateHasChanged();
+        try
+        {
+            _resolution = await Camera.StartAsync(_video);
+        }
+        catch (CameraException ex)
+        {
+            _cameraOn = false;
+            _error = ex.Message;
+        }
+    }
+
+    private async Task StopCameraAsync()
+    {
+        await Camera.StopAsync();
+        _cameraOn = false;
+    }
+
+    private async Task CaptureAsync()
+    {
+        _error = null;
+        try
+        {
+            SetPhoto(await Camera.CaptureAsync(_video), "image/jpeg", $"receipt-{DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture)}.jpg");
+            await StopCameraAsync();
+        }
+        catch (CameraException ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task ChooseFileAsync(InputFileChangeEventArgs e)
+    {
+        _error = _success = null;
+        var file = e.File;
+        const long readLimit = 40 * 1024 * 1024; // phone photos are large; they're shrunk below
+        if (file.Size > readLimit)
+        {
+            _error = $"{file.Name} is too large.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            using var stream = new MemoryStream();
+            await file.OpenReadStream(readLimit).CopyToAsync(stream);
+            var bytes = stream.ToArray();
+            var type = string.IsNullOrEmpty(file.ContentType) ? "application/octet-stream" : file.ContentType;
+
+            // Big photos are re-encoded to fit the receipt limit; PDFs and HEIC are kept as they are.
+            if (type is "image/jpeg" or "image/png" or "image/webp" && bytes.Length > 1_500_000)
+            {
+                bytes = await Camera.ShrinkAsync(bytes, type);
+                type = "image/jpeg";
+            }
+
+            SetPhoto(bytes, type, file.Name);
+        }
+        catch (Exception ex) when (ex is IOException or CameraException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void SetPhoto(byte[] bytes, string type, string name)
+    {
+        (_photo, _photoType, _photoName) = (bytes, type, name);
+        if (type == "image/jpeg" && !name.EndsWith(".jpg", StringComparison.OrdinalIgnoreCase) && !name.EndsWith(".jpeg", StringComparison.OrdinalIgnoreCase))
+        {
+            _photoName = Path.GetFileNameWithoutExtension(name) + ".jpg";
+        }
+
+        (_total, _date, _otherDate, _merchant, _rawText, _matches) = (null, null, null, null, null, null);
+        (_selected, _taxCode, _searchOpen, _amount, _search) = (null, null, false, null, null);
+        (_to, _from) = (Periods.Today, Periods.Today.AddDays(-60));
+        _candidates = null;
+        _readNote = CanRead ? null : "LoonieBooks can't read this kind of file. Type the total and date to find the transaction.";
+
+        // Read it straight away and look up the transaction; the user can correct what was found.
+        if (CanRead) _ = InvokeAsync(ReadAsync);
+        else _ = InvokeAsync(async () => { await LoadCandidatesAsync(); StateHasChanged(); });
+    }
+
+    // ---------------------------------------------------------------- sending from a phone
+
+    private async Task StartRelayAsync()
+    {
+        _error = _success = null;
+        if (_cameraOn) await StopCameraAsync();
+        await _phone!.StartAsync();
+    }
+
+    private void PhotoFromPhone(RelayedReceipt file)
+    {
+        SetPhoto(file.Content, file.ContentType, file.FileName);
+        _success = "Received the photo from your phone.";
+    }
+
+    private void ShowError(string message) => _error = message;
+
+    // ---------------------------------------------------------------- reading the receipt
+
+    private async Task ReadAsync()
+    {
+        if (_photo is not { } photo || _reading) return;
+
+        _reading = true;
+        (_progressText, _progressValue, _readNote, _error) = ("Getting ready…", 0, null, null);
+        StateHasChanged();
+        try
+        {
+            string text;
+            if (_photoType == "application/pdf")
+            {
+                text = ReceiptPdf.ReadText(photo);
+                if (text.Trim().Length == 0) _readNote = "This PDF is a scanned image with no text. Type the total and date.";
+            }
+            else
+            {
+                text = await Ocr.ReadTextAsync(photo, _photoType, (status, value) =>
+                {
+                    (_progressText, _progressValue) = (Describe(status), value);
+                    _ = InvokeAsync(StateHasChanged);
+                });
+                _readNote = "Read in this browser. Check the numbers before you attach it.";
+            }
+
+            if (_photo != photo) return; // a different photo was chosen meanwhile
+
+            _rawText = text.Trim();
+            var fields = ReceiptText.Parse(text, Periods.Today);
+            (_total, _date, _merchant, _otherDate) = (fields.Total, fields.Date, fields.Merchant, fields.OtherDate);
+            if (fields == new ReceiptFields(null, null, null) && _readNote is null or "Read in this browser. Check the numbers before you attach it.")
+            {
+                _readNote = "Couldn't find a total or date. Retake the photo closer and flatter, or type them in.";
+            }
+
+            await FindMatchesAsync();
+        }
+        catch (CameraException ex)
+        {
+            _readNote = ex.Message;
+        }
+        finally
+        {
+            _reading = false;
+            await LoadSearchIfShownAsync();
+            StateHasChanged(); // started outside an event handler, so nothing else re-renders
+        }
+    }
+
+    /// <summary>Asks first: unlike reading in the browser, this sends the photo to Anthropic.</summary>
+    private async Task ReadWithClaudeAsync()
+    {
+        if (_photo is not { } photo || _reading) return;
+        if (!await JS.InvokeAsync<bool>("confirm",
+                "Read this receipt with Claude?\n\nThe photo is sent to Anthropic's API to be read. Reading in the browser keeps it on this device but is less accurate.")) return;
+
+        _reading = true;
+        (_progressText, _progressValue, _readNote, _error) = ("Claude is reading the receipt…", 0.5, null, null);
+        StateHasChanged();
+        try
+        {
+            var fields = await Cloud.ReadAsync(photo, _photoType, _photoName);
+            if (_photo != photo) return;
+
+            (_total, _date, _merchant, _otherDate) = (fields.Total, fields.Date, fields.Merchant, null);
+            _readNote = fields == new ReceiptFields(null, null, null)
+                ? "Claude couldn't make out a total or date. Type them in."
+                : "Read by Claude. Check the numbers before you attach it.";
+            await FindMatchesAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _readNote = ex.Message;
+        }
+        finally
+        {
+            _reading = false;
+            await LoadSearchIfShownAsync();
+            StateHasChanged();
+        }
+    }
+
+    private static string Describe(string status) => status switch
+    {
+        var s when s.Contains("core", StringComparison.OrdinalIgnoreCase) => "Loading the reader (only slow the first time)…",
+        var s when s.Contains("traineddata", StringComparison.OrdinalIgnoreCase) => "Loading English and French…",
+        var s when s.Contains("initializ", StringComparison.OrdinalIgnoreCase) => "Starting…",
+        var s when s.Contains("recognizing", StringComparison.OrdinalIgnoreCase) => "Reading the receipt…",
+        _ => "Working…",
+    };
+
+    // A date the user typed is no longer ambiguous.
+    private Task SetReceiptDateAsync(ChangeEventArgs e)
+    {
+        (_date, _otherDate) = (Display.TryParseIso((string?)e.Value, out var date) ? date : null, null);
+        return FindMatchesAsync();
+    }
+
+    private Task SwapDates()
+    {
+        (_date, _otherDate) = (_otherDate, _date);
+        return FindMatchesAsync();
+    }
+
+    private async Task FindMatchesAsync()
+    {
+        try
+        {
+            var merchant = string.IsNullOrWhiteSpace(_merchant) ? null : _merchant.Trim();
+            var fields = new ReceiptFields(_total is > 0 ? _total : null, _date, merchant, _otherDate);
+            _matches = fields == new ReceiptFields(null, null, null) ? null : await Store.FindReceiptMatchesAsync(fields);
+
+            // A choice that's no longer on screen isn't kept.
+            if (_selected is not null && _matches?.Any(m => IsSelected(m.Item)) != true && !(ShowSearch && _candidates?.Any(IsSelected) == true))
+            {
+                _selected = null;
+            }
+
+            // A clear winner is chosen for you; anything closer is left to the user.
+            if (_matches is [var best, ..] && best.Score >= 80 && (_matches.Count == 1 || _matches[1].Score <= best.Score - 25))
+            {
+                _selected = best.Item;
+            }
+
+            // Point the search at the best match's date, or else the receipt's.
+            if ((_matches is [var top, ..] ? top.Item.Transaction.EffectiveDate : _date) is { } around)
+            {
+                (_from, _to) = (around.AddDays(-14), around.AddDays(14));
+                _candidates = null;
+            }
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't look for matching transactions: {ex.Message}";
+        }
+
+        await LoadSearchIfShownAsync();
+    }
+
+    /// <summary>The transaction list is only fetched once the search is on screen.</summary>
+    private Task LoadSearchIfShownAsync() => ShowSearch && _candidates is null ? LoadCandidatesAsync() : Task.CompletedTask;
+
+    // ---------------------------------------------------------------- attaching
+
+    private async Task AttachAsync()
+    {
+        if (_selected is not { } target || _photo is null) return;
+
+        _busy = true;
+        _error = _success = null;
+        try
+        {
+            await Store.AddReceiptAsync(target.Transaction, new UploadReceiptRequest(_photoName, _photoType, _photo));
+            if (!string.IsNullOrEmpty(_taxCode))
+            {
+                await Store.SetTaxTagAsync(target.Transaction, (target.Tax ?? new TaxTag(_taxCode, TaxTagStatus.Confirmed)) with { Code = _taxCode, Status = TaxTagStatus.Confirmed });
+            }
+
+            _success = $"Attached {_photoName} to {target.Transaction.Description} ({Display.Date(target.Transaction.EffectiveDate)}).";
+            (_photo, _selected, _taxCode, _matches, _rawText, _readNote) = (null, null, null, null, null, null);
+            (_total, _date, _otherDate, _merchant, _candidates, _searchOpen) = (null, null, null, null, null, false);
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private string AccountName(string accountId) => _accounts.FirstOrDefault(a => a.AccountId == accountId)?.DisplayName ?? "";
+
+    private static string Size(long bytes) => bytes >= 1024 * 1024
+        ? (bytes / (1024.0 * 1024)).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " MB"
+        : Math.Max(1, bytes / 1024).ToString(System.Globalization.CultureInfo.InvariantCulture) + " KB";
+
+    public async ValueTask DisposeAsync() => await Camera.StopAsync();
+}

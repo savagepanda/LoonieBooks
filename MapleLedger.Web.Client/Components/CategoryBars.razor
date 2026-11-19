@@ -1,0 +1,367 @@
+﻿@* Horizontal bars for one series (so no legend box: the card title names it). Values sit at the
+   bar tips in text colour. Bars show top-level categories; the chevron expands one into its
+   sub-categories (one at a time, so the list stays short). Clicking a row selects it, expanding
+   it too; clicking the selected row again steps back out. Past eight categories the rest fold
+   into Other, which expands into those categories, each selectable on its own.
+   With Pie set, the same rows become the legend beside a pie of the top-level categories (Other in
+   gray); a slice clicks like its row, and a selection dims the other slices. The category whose
+   details are open gets a second, smaller pie under the first, split into its details, each in a
+   colour of its own starting from the category's (their rows get matching swatches). With Flatten set, that
+   category's sub-categories stand in its place as rows of their own, with nothing to expand. *@
+
+@if (Rows.Count == 0)
+{
+    <p class="text-body-secondary mb-0">Nothing to show for this period.</p>
+}
+else if (Pie)
+{
+    <div class="viz-root category-pie">
+        @* The legend rows are the buttons (keyboard and screen readers); the slices are a mouse shortcut. *@
+        <div class="category-pies">
+            <svg class="category-pie-svg" viewBox="0 0 100 100" aria-hidden="true">@DrawSlices(Slices())</svg>
+            @* The category whose details are open, split into them, each in a colour of its own. *@
+            @if (OpenRow() is { } open)
+            {
+                <div class="category-breakout">
+                    <svg class="category-pie-svg" viewBox="0 0 100 100" aria-hidden="true">@DrawSlices(BreakoutSlices(open))</svg>
+                    <div class="category-breakout-name text-truncate">@open.Category</div>
+                </div>
+            }
+        </div>
+        <div class="category-bars category-legend">@Lines</div>
+    </div>
+}
+else
+{
+    <div class="viz-root category-bars">@Lines</div>
+}
+
+@code {
+    private RenderFragment Lines => __builder =>
+    {
+        foreach (var row in Rows)
+        {
+            if (ReferenceEquals(row, _other))
+            {
+                // "Other" folds several categories together: clicking it lists them, and each of
+                // those selects as a whole category.
+                var otherExpanded = Expanded == OtherKey;
+                <div class="category-line">
+                    @Toggle(otherExpanded, "the categories in Other", OtherKey)
+                    @Row(row, OtherRow, null, OnSelect.HasDelegate, false, () => ExpandedChanged.InvokeAsync(otherExpanded ? null : OtherKey), otherExpanded, Pie ? OtherColor : null)
+                </div>
+
+                @if (otherExpanded)
+                {
+                    @foreach (var folded in _folded)
+                    {
+                        var foldedSelected = IsRowSelected(folded);
+                        <div class="category-line">
+                            <span class="category-toggle" aria-hidden="true"></span>
+                            @Row(folded, NameOf(folded), OtherRow, OnSelect.HasDelegate, foldedSelected,
+                                 () => IsLeaf(folded) ? SelectLeafAsync(folded, foldedSelected)
+                                     : OnSelect.InvokeAsync(foldedSelected ? null : new CategoryChoice(folded.Category, null, Kind)))
+                        </div>
+                    }
+                }
+                continue;
+            }
+
+            var selectable = OnSelect.HasDelegate;
+            if (IsLeaf(row))
+            {
+                var leafSelected = IsRowSelected(row);
+                <div class="category-line">
+                    <span class="category-toggle" aria-hidden="true"></span>
+                    @Row(row, NameOf(row), null, selectable, leafSelected, () => SelectLeafAsync(row, leafSelected), color: ColorOf(row))
+                </div>
+                continue;
+            }
+
+            var selected = IsRowSelected(row);
+            var details = selectable ? DetailsOf(row.Category) : [];
+            var expanded = details.Count > 0 && Expanded == row.Category;
+            <div class="category-line">
+                @if (details.Count > 0)
+                {
+                    @Toggle(expanded, $"{row.Category} details", row.Category)
+                }
+                else
+                {
+                    <span class="category-toggle" aria-hidden="true"></span>
+                }
+                @Row(row, row.Category, null, selectable, selected, () => SelectAsync(row.Category, selected ? null : new CategoryChoice(row.Category, null, Kind)), color: ColorOf(row))
+            </div>
+
+            @if (expanded)
+            {
+                @foreach (var detail in details)
+                {
+                    var key = detail.SubCategory ?? Categories.NoSubCategory;
+                    var detailSelected = Selected is { } d && IsSelected(d, row.Category) && d.SubCategory == key;
+                    <div class="category-line">
+                        <span class="category-toggle" aria-hidden="true"></span>
+                        @Row(detail, detail.SubCategory ?? "No detail", row.Category, true, detailSelected,
+                             () => OnSelect.InvokeAsync(new CategoryChoice(row.Category, detailSelected ? null : key, Kind)), color: Pie ? ShadeOf(row, details, detail) : null)
+                    </div>
+                }
+            }
+        }
+    };
+
+    private const int MaxRows = 8;
+    private const string OtherRow = "Other";
+
+    // Other's key in Expanded, which can't clash with a category the user named "Other".
+    private const string OtherKey = "\u0001other";
+
+    [Parameter, EditorRequired] public IReadOnlyList<CategoryTotal> Items { get; set; } = [];
+
+    /// <summary>Per category and sub-category totals (<see cref="CategoryTotal.SubCategory"/> null for no detail).</summary>
+    [Parameter] public IReadOnlyList<CategoryTotal>? Details { get; set; }
+
+    /// <summary>
+    /// The selected category, highlighted and expanded; its <see cref="CategoryChoice.SubCategory"/> is a
+    /// sub-category, <see cref="Categories.NoSubCategory"/>, or null for the whole category.
+    /// </summary>
+    [Parameter] public CategoryChoice? Selected { get; set; }
+
+    /// <summary>A row was clicked: the new selection, or null to clear it.</summary>
+    [Parameter] public EventCallback<CategoryChoice?> OnSelect { get; set; }
+
+    /// <summary>The one category showing its sub-categories, shared between lists so only one is open on the page.</summary>
+    [Parameter] public string? Expanded { get; set; }
+
+    [Parameter] public EventCallback<string?> ExpandedChanged { get; set; }
+
+    /// <summary>Draw a pie of the top-level categories, with these rows as its legend, instead of bars.</summary>
+    [Parameter] public bool Pie { get; set; }
+
+    /// <summary>Which list this is (income or spending), stamped on what's picked from it.</summary>
+    [Parameter] public CategoryKind? Kind { get; set; }
+
+    /// <summary>
+    /// A category shown as its sub-categories, each a row of its own beside the other categories
+    /// (Income, whose sub-categories are what people think of as their income).
+    /// </summary>
+    [Parameter] public string? Flatten { get; set; }
+
+    /// <summary>What <see cref="CategoryTotal.TransactionCount"/> counts, for the tooltips.</summary>
+    [Parameter] public string Unit { get; set; } = "transaction(s)";
+
+    /// <summary>Uncategorized is in both lists; picking it in one doesn't select the other.</summary>
+    private bool IsSelected(CategoryChoice choice, string category) =>
+        choice.Category == category && (choice.Kind is null || Kind is null || choice.Kind == Kind || !Categories.KindDependsOnDirection(category));
+
+    private List<CategoryTotal> Rows = [];
+    private List<CategoryTotal> _folded = [];
+    private CategoryTotal? _other;
+    private decimal _max, _total;
+
+    // Whether Flatten's category was replaced by its sub-categories (it has some to show).
+    private bool _flattened;
+
+    protected override void OnParametersSet()
+    {
+        var items = Items;
+        _flattened = Flatten is { } flatten && Items.Any(i => i.Category == flatten) && DetailsOf(flatten).Count > 0;
+        if (_flattened)
+        {
+            items = Items.Where(i => i.Category != Flatten).Concat(DetailsOf(Flatten!)).OrderByDescending(i => i.Amount).ToList();
+        }
+
+        // Past eight categories the rest fold into "Other" rather than inventing more bars.
+        Rows = items.Take(MaxRows).ToList();
+        _folded = items.Skip(MaxRows).ToList();
+        _other = null;
+        if (_folded.Count > 0)
+        {
+            _other = new CategoryTotal(OtherRow, _folded.Sum(r => r.Amount), _folded.Sum(r => r.TransactionCount));
+            Rows.Add(_other);
+        }
+
+        _max = Rows.Count == 0 ? 1 : Rows.Max(r => r.Amount);
+        _total = items.Sum(r => r.Amount);
+    }
+
+    /// <summary>A sub-category standing in for its flattened category.</summary>
+    private bool IsLeaf(CategoryTotal row) => _flattened && row.Category == Flatten && !ReferenceEquals(row, _other);
+
+    /// <summary>A row's name: its category, or for a flattened one its sub-category (the category itself for "no detail").</summary>
+    private string NameOf(CategoryTotal row) => IsLeaf(row) ? row.SubCategory ?? row.Category : row.Category;
+
+    private static string KeyOf(CategoryTotal row) => row.SubCategory ?? Categories.NoSubCategory;
+
+    /// <summary>Whether a row is the selection: its whole category, or for a flattened one exactly its sub-category.</summary>
+    private bool IsRowSelected(CategoryTotal row) => IsLeaf(row)
+        ? Selected is { } d && IsSelected(d, row.Category) && d.SubCategory == KeyOf(row)
+        : Selected is { SubCategory: null } s && IsSelected(s, row.Category);
+
+    private Task SelectLeafAsync(CategoryTotal row, bool selected) =>
+        OnSelect.InvokeAsync(selected ? null : new CategoryChoice(row.Category, KeyOf(row), Kind));
+
+    /// <summary>Selecting a category opens its details (and closes any others).</summary>
+    private async Task SelectAsync(string category, CategoryChoice? choice)
+    {
+        if (choice is not null && DetailsOf(category).Count > 0) await ExpandedChanged.InvokeAsync(category);
+        await OnSelect.InvokeAsync(choice);
+    }
+
+    /// <summary>A category's breakdown, or empty when there's nothing to break down (no detail at all).</summary>
+    private List<CategoryTotal> DetailsOf(string category)
+    {
+        var details = (Details ?? []).Where(d => d.Category == category).ToList();
+        return details.All(d => d.SubCategory is null) ? [] : details;
+    }
+
+    private RenderFragment Toggle(bool expanded, string what, string key) =>
+        @<button type="button" class="category-toggle" aria-expanded="@(expanded ? "true" : "false")"
+                 aria-label="@($"{(expanded ? "Hide" : "Show")} {what}")" title="@(expanded ? "Hide details" : "Show details")"
+                 @onclick="() => ExpandedChanged.InvokeAsync(expanded ? null : key)">@(expanded ? "▾" : "▸")</button>;
+
+    /// <param name="parent">The row this one sits under (a category, or Other), or null for a top-level row.</param>
+    /// <param name="expands">Set for Other, whose click opens and closes its list rather than selecting.</param>
+    /// <param name="color">The row's slice colour in a pie (its legend swatch), or null for none.</param>
+    private RenderFragment Row(CategoryTotal total, string name, string? parent, bool selectable, bool selected, Func<Task> select, bool? expands = null, string? color = null) => __builder =>
+    {
+        var title = $"{(parent is null ? "" : $"{parent} › ")}{name}: {Money.Format(total.Amount)} across {total.TransactionCount} {Unit}, {Share(total)} of the total";
+        if (expands is { } open) title += open ? ". Click to hide these categories." : ". Click to list these categories.";
+        var css = $"category-row{(parent is null ? "" : " category-row-sub")}{(selected ? " is-selected" : "")}";
+        if (selectable && expands is { } isOpen)
+        {
+            <button type="button" class="@css" aria-expanded="@(isOpen ? "true" : "false")" title="@title" @onclick="select">@Bar(total, name, color)</button>
+        }
+        else if (selectable)
+        {
+            <button type="button" class="@css" aria-pressed="@(selected ? "true" : "false")" title="@title" @onclick="select">@Bar(total, name, color)</button>
+        }
+        else
+        {
+            <div class="@css" title="@title">@Bar(total, name, color)</div>
+        }
+    };
+
+    private RenderFragment Bar(CategoryTotal row, string name, string? color) => Pie
+        ? @<text>
+            <span class="viz-swatch" style="@(color is null ? null : $"background: {color}")"></span>
+            <span class="category-name">@name</span>
+            <span class="category-value">@Money.FormatWhole(row.Amount)</span>
+            <span class="category-share">@Share(row)</span>
+        </text>
+        : @<text>
+            <span class="category-name">@name</span>
+            <span class="category-track">
+                <span class="category-bar" style="width: @Display.Svg(Math.Max(0.5, (double)(row.Amount / _max) * 100))%"></span>
+                <span class="category-value">@Money.FormatWhole(row.Amount)</span>
+            </span>
+        </text>;
+
+    // Slices take the categorical hues in order (eight, the most rows before Other); Other is gray.
+    private const string OtherColor = "var(--viz-cat-other)";
+    private string? ColorOf(CategoryTotal row) => Pie ? $"var(--viz-cat-{Rows.IndexOf(row) + 1})" : null;
+
+    private sealed record Slice(decimal Amount, string Color, string Title, bool Dimmed, Func<Task> Select);
+
+    /// <summary>Slices clockwise from twelve o'clock, sized by their share of the positive amounts (others are left out).</summary>
+    private RenderFragment DrawSlices(IReadOnlyList<Slice> slices) => __builder =>
+    {
+        var shown = slices.Where(s => s.Amount > 0).ToList();
+        var total = shown.Sum(s => s.Amount);
+        var start = 0.0;
+        foreach (var slice in shown)
+        {
+            var sweep = (double)(slice.Amount / total) * 360;
+            <path class="@($"category-slice{(OnSelect.HasDelegate ? " viz-link" : "")}{(slice.Dimmed ? " is-dimmed" : "")}")" style="fill: @slice.Color" d="@SlicePath(start, sweep)"
+                  @onclick="slice.Select"><title>@slice.Title</title></path>
+            start += sweep;
+        }
+    };
+
+    /// <summary>The main pie: one slice per row.</summary>
+    private List<Slice> Slices()
+    {
+        // A slice is "the selection" when its category (or a sub-category of it) is picked from this
+        // list; Other is when one of its folded categories is.
+        CategoryTotal? picked = null;
+        if (Selected is { } s)
+            picked = Rows.FirstOrDefault(r => !ReferenceEquals(r, _other) && (IsLeaf(r) ? IsRowSelected(r) : IsSelected(s, r.Category)))
+                ?? (_folded.Any(f => IsLeaf(f) ? IsRowSelected(f) : IsSelected(s, f.Category)) ? _other : null);
+
+        var slices = new List<Slice>();
+        foreach (var row in Rows)
+        {
+            var isOther = ReferenceEquals(row, _other);
+            var selected = !isOther && IsRowSelected(row);
+            var title = $"{(isOther ? OtherRow : NameOf(row))}: {Money.Format(row.Amount)} across {row.TransactionCount} {Unit}, {Share(row)} of the total";
+            Func<Task> select = !OnSelect.HasDelegate ? () => Task.CompletedTask
+                : isOther ? () => ExpandedChanged.InvokeAsync(Expanded == OtherKey ? null : OtherKey)
+                : IsLeaf(row) ? () => SelectLeafAsync(row, selected)
+                : () => SelectAsync(row.Category, selected ? null : new CategoryChoice(row.Category, null, Kind));
+            slices.Add(new Slice(row.Amount, isOther ? OtherColor : ColorOf(row)!, title, picked is not null && !ReferenceEquals(picked, row), select));
+        }
+
+        return slices;
+    }
+
+    /// <summary>The row whose details are open (and so get a pie of their own), if any.</summary>
+    private CategoryTotal? OpenRow() => !OnSelect.HasDelegate || Expanded is null ? null
+        : Rows.FirstOrDefault(r => !ReferenceEquals(r, _other) && !IsLeaf(r) && r.Category == Expanded && DetailsOf(r.Category).Count > 0);
+
+    /// <summary>
+    /// The open category's pie: one slice per detail, each its own colour. A picked
+    /// detail dims the others; picking it again (or another) works as its row does.
+    /// </summary>
+    private List<Slice> BreakoutSlices(CategoryTotal row)
+    {
+        var details = DetailsOf(row.Category);
+        var categoryTotal = details.Where(d => d.Amount > 0).Sum(d => d.Amount);
+        var pickedKey = Selected is { SubCategory: { } sub } s && IsSelected(s, row.Category) ? sub : null;
+        return details.Select(detail =>
+        {
+            var key = detail.SubCategory ?? Categories.NoSubCategory;
+            var selected = pickedKey == key;
+            var share = categoryTotal == 0 || detail.Amount <= 0 ? "0%"
+                : detail.Amount / categoryTotal < 0.005m ? "<1%"
+                : (detail.Amount / categoryTotal).ToString("0%", System.Globalization.CultureInfo.InvariantCulture);
+            var title = $"{row.Category} › {detail.SubCategory ?? "No detail"}: {Money.Format(detail.Amount)} across {detail.TransactionCount} {Unit}, {share} of {row.Category}";
+            return new Slice(detail.Amount, ShadeOf(row, details, detail), title, pickedKey is not null && !selected,
+                () => OnSelect.InvokeAsync(new CategoryChoice(row.Category, selected ? null : key, Kind)));
+        }).ToList();
+    }
+
+    /// <summary>
+    /// A detail's colour: the categorical hues in turn, starting from its category's own (so the
+    /// largest detail matches its slice in the main pie). Shades of one hue were too close to tell
+    /// apart; past eight details the hues come round again, faded so they still differ.
+    /// </summary>
+    private string ShadeOf(CategoryTotal row, IReadOnlyList<CategoryTotal> details, CategoryTotal detail)
+    {
+        var index = Math.Max(0, details.ToList().IndexOf(detail));
+        var hue = $"var(--viz-cat-{(Math.Max(0, Rows.IndexOf(row)) + index) % MaxRows + 1})";
+        var lap = index / MaxRows;
+        return lap == 0 ? hue : $"color-mix(in srgb, {hue} {Math.Max(30, 100 - lap * 45)}%, var(--bs-card-bg, var(--bs-body-bg)))";
+    }
+
+    private static string SlicePath(double start, double sweep)
+    {
+        const double c = 50, r = 49;
+        // A whole circle can't be one arc (its ends meet): draw it as two halves.
+        if (sweep >= 359.99)
+            return $"M {Display.Svg(c)} {Display.Svg(c - r)} A {Display.Svg(r)} {Display.Svg(r)} 0 1 1 {Display.Svg(c)} {Display.Svg(c + r)} A {Display.Svg(r)} {Display.Svg(r)} 0 1 1 {Display.Svg(c)} {Display.Svg(c - r)} Z";
+
+        (double X, double Y) Point(double degrees)
+        {
+            var radians = (degrees - 90) * Math.PI / 180;
+            return (c + r * Math.Cos(radians), c + r * Math.Sin(radians));
+        }
+
+        var (x0, y0) = Point(start);
+        var (x1, y1) = Point(start + sweep);
+        return $"M {Display.Svg(c)} {Display.Svg(c)} L {Display.Svg(x0)} {Display.Svg(y0)} A {Display.Svg(r)} {Display.Svg(r)} 0 {(sweep > 180 ? 1 : 0)} 1 {Display.Svg(x1)} {Display.Svg(y1)} Z";
+    }
+
+    private string Share(CategoryTotal row) =>
+        _total == 0 ? "0%"
+        : row.Amount > 0 && row.Amount / _total < 0.005m ? "<1%" // a sliver, not nothing
+        : (row.Amount / _total).ToString("0%", System.Globalization.CultureInfo.InvariantCulture);
+}

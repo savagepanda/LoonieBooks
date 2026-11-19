@@ -1,0 +1,26 @@
+@* Points to the duplicates review when some transactions look imported twice. Shows nothing otherwise, or when the check fails. *@
+@inject ILedgerStore Store
+
+@if (_count > 0)
+{
+    <div class="alert alert-warning d-flex flex-wrap align-items-center gap-2" role="status">
+        <span>@_count pair(s) of transactions look like the same one imported twice, so they may be counted double.</span>
+        <a class="alert-link" href="duplicates">Review possible duplicates</a>
+    </div>
+}
+
+@code {
+    private int _count;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _count = (await Store.FindDuplicatesAsync()).Count;
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _count = 0;
+        }
+    }
+}

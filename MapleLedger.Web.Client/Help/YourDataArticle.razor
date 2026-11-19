@@ -1,0 +1,64 @@
+@inject UserSession Session
+
+<div class="help-article">
+    <p class="help-lead">
+        Your ledger stays with you: on your own devices, or on a server you run yourself. There's no LoonieBooks service
+        holding anyone's finances.
+        @if (Session.IsDesktop && Session.Storage == StorageLocation.Cloud)
+        {
+            @:Right now it's in LoonieBooks' database on the computer running the desktop app.
+        }
+        else if (Session.Storage == StorageLocation.Cloud)
+        {
+            @:Right now it's in this LoonieBooks server's database, because your account is allowed to store a ledger here.
+        }
+        else
+        {
+            @:Right now it's in this browser, on this device, and nowhere else.
+        }
+        The bar at the top of every page says which, and <a href="data">Your data</a> explains it.
+    </p>
+
+    <h3>The places a ledger can live</h3>
+    <ul>
+        <li><strong>The desktop app's database</strong> (recommended): a file on your Windows PC, shared by every browser on it and, if you
+            turn sharing on, your household's other devices at home.</li>
+        <li><strong>This browser</strong> (any LoonieBooks site, signed in or not): a private database inside the browser. It never
+            reaches the server and nobody else can see it, but it belongs to this browser alone. Clearing the site's data, a
+            private or incognito window, or another browser or device each start from an empty ledger.</li>
+        <li><strong>Your own server's database</strong>: on a LoonieBooks server you host, the people its owner allows can sign in with
+            Google and keep their ledger there, so it's the same on any device. Signing in without that permission still keeps
+            the ledger in the browser.</li>
+    </ul>
+    <p>
+        Wherever it lives, statements, pasted text and pictures you import are read in your browser; only the transactions you
+        import are saved. Only the last four digits of an account number are ever stored.
+    </p>
+
+    <h3>Backups</h3>
+    <ul>
+        <li><span class="help-ui">Download backup</span> saves the whole ledger in one file: accounts, transactions, categories, tags, tax choices,
+            receipts and household. Keep it somewhere safe; it holds your financial history.</li>
+        <li><span class="help-ui">Restore from a backup…</span> adds what a backup holds to the ledger in use. It skips anything already there
+            and never deletes, so restoring twice is harmless.</li>
+        <li>That's also how to move a ledger: download it in one place, restore it in another.</li>
+    </ul>
+    @if (Session.Storage == StorageLocation.Browser)
+    {
+        <p class="help-caution">With the ledger in this browser, a backup is your only copy if the browser's data is lost. Download one regularly.</p>
+    }
+
+    <h3>Copying a browser ledger across</h3>
+    <p>
+        If you kept a ledger in a browser before using the desktop app's database or your own server, the copy button under
+        storage on <a href="data">Your data</a> copies it across. Anything already there is kept, duplicates are skipped, and the
+        browser's copy is left as it is.
+    </p>
+
+    <h3>Start over</h3>
+    <p>
+        <span class="help-ui">Delete everything…</span> removes the whole ledger where it's stored now: every account, transaction, receipt, tax
+        choice and household member, so you can import again from scratch. It offers <span class="help-ui">Download backup first</span>, then
+        asks you to type DELETE. It can't be undone.
+    </p>
+</div>

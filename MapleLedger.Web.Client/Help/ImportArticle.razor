@@ -1,0 +1,59 @@
+<div class="help-article">
+    <p class="help-lead">
+        The quickest way in: open your account's transactions on your bank's website, select them, copy, and paste into
+        LoonieBooks. It works out the dates, descriptions and amounts itself, in English or French. Reading happens in your
+        browser; only the transactions you import are saved.
+    </p>
+
+    <h3>Step by step</h3>
+    <ol>
+        <li>On <a href="import">Import</a>, choose the <span class="help-ui">Account</span> the transactions belong to.
+            (No accounts yet? <a href="accounts">Add one first</a>.) Investment accounts aren't listed: they keep holdings
+            instead of transactions; see <a href="help?a=holdings">Investment holdings</a>.</li>
+        <li>On your bank's site, show the transactions for the dates you want. Drag across the rows to select them, or click in the
+            list and press <kbd>Ctrl</kbd>+<kbd>A</kbd>, then <kbd>Ctrl</kbd>+<kbd>C</kbd>. Taking in the headings and other text around
+            the table is fine.</li>
+        <li>Click in the <span class="help-ui">Pasted text</span> box and press <kbd>Ctrl</kbd>+<kbd>V</kbd>.</li>
+        <li>Check what it found (below), untick any rows you don't want, and choose <span class="help-ui">Import</span>.</li>
+    </ol>
+    <HelpClip Name="import-paste" Caption="Pasting a month of credit card transactions, checking them and importing." />
+    <p>
+        Rather work from downloaded files or screenshots? See <a href="help?a=statement-files">Statement files and pictures</a>;
+        they all end up in the same box and the same preview.
+    </p>
+
+    <h3>Checking what it read</h3>
+    <ul>
+        <li>The line under the box says how the text was read and how many transactions were found. <em>Notes</em> lists lines it
+            couldn't make sense of; headings and page footers usually belong there.</li>
+        <li><strong>Columns</strong>: when the text is a table, each column gets a picker (Date, Posted date, Description,
+            Amount (+/−), Money out, Money in, Balance or Ignore) with its first rows underneath. If one was guessed wrong, change it.</li>
+        <li><strong>Numeric dates</strong> like 03/04/2026: if they come out as the wrong month, set
+            <span class="help-ui">Numeric dates like 03/04/2026 are</span> to <em>Day/Month/Year</em> or <em>Month/Day/Year</em>.</li>
+        <li><strong>In and out swapped</strong>: if deposits appear as spending, swap the <em>Money out</em> and <em>Money in</em>
+            column pickers. When the paste includes a running balance, LoonieBooks uses it to tell money in from money out by itself.</li>
+    </ul>
+
+    <h3>The preview</h3>
+    <p>
+        Every transaction is listed with the category and tax treatment it will get. <span class="badge text-bg-light border fw-normal">remembered</span>
+        means it takes the category (and tags) you gave the same merchant before. Untick rows to leave them out; the bar at the
+        bottom totals what will go in and out.
+    </p>
+    <p>
+        If the paste included balances, <span class="help-ui">Set account balance to … as of …</span> updates the account's balance to the
+        newest one. Then choose <span class="help-ui">Import</span>.
+    </p>
+
+    <h3>After importing</h3>
+    <ul>
+        <li><span class="help-ui">Review their categories</span> opens just those transactions, filtered to the ones needing review.
+            See <a href="help?a=categorizing">Categories and review</a>.</li>
+        <li>Transactions already in the ledger are skipped, so you can paste overlapping date ranges, such as the last 90 days
+            every month, without doubling anything.</li>
+        <li>Wrong account or wrong file? <span class="help-ui">Undo this import</span> takes it back.
+            See <a href="help?a=undo-duplicates">Undo an import, and duplicates</a>.</li>
+        <li>Likely tax claims (pharmacy, dental, daycare, donations, RRSP…) are suggested for you to confirm later on the
+            <a href="tax">Tax report</a>.</li>
+    </ul>
+</div>

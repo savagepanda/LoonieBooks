@@ -1,0 +1,197 @@
+@page "/tags"
+@inject TagCatalog Catalog
+@inject ILedgerStore Store
+@inject IJSRuntime JS
+
+<PageTitle>Tags · LoonieBooks</PageTitle>
+
+<h1 class="h3 mb-2">Tags</h1>
+<p class="text-body-secondary">
+    Tags group transactions across categories and accounts: tag a rental property's rent, repairs and property tax
+    <em>Rental</em>, then filter the dashboard or the transaction list by it. A transaction can have several tags.
+    Put them on from any transaction's <strong>+ Tag</strong>, or on a whole filtered list on the Transactions page.
+    A few common ones are built in; add your own here or from any tag picker.
+</p>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+@if (_message is not null)
+{
+    <div class="alert alert-success">@_message</div>
+}
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-12 col-md-6">
+                <label class="form-label small" for="new-tag">New tag</label>
+                <div class="input-group input-group-sm">
+                    <input id="new-tag" class="form-control" placeholder="e.g. Cottage" maxlength="@LedgerTag.MaxNameLength"
+                           @bind="_newName" @bind:event="oninput" @onkeydown="e => OnEnterAsync(e, AddAsync)" disabled="@_busy" />
+                    <button class="btn btn-primary" @onclick="AddAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newName))">Add</button>
+                </div>
+            </div>
+            <div class="col-12 col-md-6">
+                <label class="form-label small" for="find-tag">Find a tag</label>
+                <input id="find-tag" type="search" class="form-control form-control-sm" placeholder="Search tags" @bind="_search" @bind:event="oninput" />
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (_tags is null)
+{
+    <p class="text-body-secondary">Loading…</p>
+}
+else if (_tags.Count == 0)
+{
+    <p class="text-body-secondary">No tags yet.</p>
+}
+else
+{
+    var shown = _tags.Where(u => TagCatalog.Matching([u.Tag], _search).Any()).ToList();
+    <div class="card">
+        <ul class="list-group list-group-flush">
+            @foreach (var usage in shown)
+            {
+                var tag = usage.Tag;
+                <li class="list-group-item d-flex flex-wrap align-items-center gap-2" @key="tag.Id">
+                    @if (_renaming == tag.Id)
+                    {
+                        <div class="input-group input-group-sm" style="max-width: 22rem">
+                            <input class="form-control" aria-label="New name for @tag.Name" maxlength="@LedgerTag.MaxNameLength"
+                                   @ref="_renameInput" @bind="_renameText" @bind:event="oninput" @onkeydown="RenameKeyAsync" disabled="@_busy" />
+                            <button class="btn btn-primary" @onclick="RenameAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_renameText))">Save</button>
+                            <button class="btn btn-outline-secondary" @onclick="StopRenaming" disabled="@_busy">Cancel</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <span class="badge rounded-pill text-bg-info fw-normal tag-chip">@tag.Name</span>
+                        @if (DefaultTags.IsDefault(tag.Id))
+                        {
+                            <span class="badge text-bg-secondary fw-normal">Built-in</span>
+                        }
+                        <a class="small" href="@TransactionsLink(tag)">@usage.Transactions transaction(s)</a>
+                        @if (!DefaultTags.IsDefault(tag.Id))
+                        {
+                            <span class="ms-auto d-flex gap-3">
+                                <button class="btn btn-sm btn-link p-0" @onclick="() => StartRenaming(tag)" disabled="@_busy">Rename</button>
+                                <button class="btn btn-sm btn-link text-danger p-0" @onclick="() => DeleteAsync(usage)" disabled="@_busy">Delete</button>
+                            </span>
+                        }
+                    }
+                </li>
+            }
+            @if (shown.Count == 0)
+            {
+                <li class="list-group-item text-body-secondary">No tags match “@_search.Trim()”.</li>
+            }
+        </ul>
+    </div>
+    <p class="small text-body-secondary mt-2">
+        @_tags.Count(u => !DefaultTags.IsDefault(u.Tag.Id)) of your own (at most @LedgerTag.MaxCount). Built-in tags can't be renamed or removed;
+        renaming one of yours keeps it on its transactions.
+    </p>
+}
+
+@code {
+    private IReadOnlyList<TagUsage>? _tags;
+    private string _newName = "", _search = "";
+    private string? _renaming;
+    private string _renameText = "";
+    private ElementReference _renameInput;
+    private bool _focusRename, _busy;
+    private string? _error, _message;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _tags = await Store.GetTagUsageAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load your tags: {ex.Message}";
+            _tags = [];
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusRename) return;
+        _focusRename = false;
+        await _renameInput.FocusAsync();
+    }
+
+    /// <summary>Every transaction with the tag, whatever its date or account.</summary>
+    private static string TransactionsLink(LedgerTag tag) =>
+        $"transactions?tag={Uri.EscapeDataString(tag.Id)}&accountId=&from=1990-01-01&to={Display.Iso(Periods.Today)}";
+
+    private static async Task OnEnterAsync(KeyboardEventArgs e, Func<Task> action)
+    {
+        if (e.Key == "Enter") await action();
+    }
+
+    private Task AddAsync() => RunAsync(async () =>
+    {
+        if (string.IsNullOrWhiteSpace(_newName)) return;
+        var added = await Catalog.AddAsync(_newName);
+        (_newName, _message) = ("", $"Added {added.Name}.");
+    });
+
+    private void StartRenaming(LedgerTag tag) => (_renaming, _renameText, _focusRename, _message, _error) = (tag.Id, tag.Name, true, null, null);
+
+    private void StopRenaming() => (_renaming, _renameText) = (null, "");
+
+    private async Task RenameKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await RenameAsync();
+        else if (e.Key == "Escape") StopRenaming();
+    }
+
+    private Task RenameAsync() => RunAsync(async () =>
+    {
+        if (_renaming is not { } id || string.IsNullOrWhiteSpace(_renameText)) return;
+        var renamed = await Catalog.RenameAsync(id, _renameText);
+        StopRenaming();
+        _message = $"Renamed to {renamed.Name}.";
+    });
+
+    private async Task DeleteAsync(TagUsage usage)
+    {
+        var question = usage.Transactions == 0
+            ? $"Delete the tag {usage.Tag.Name}?"
+            : $"Delete the tag {usage.Tag.Name}? It comes off its {usage.Transactions} transaction(s); the transactions themselves stay.";
+        if (!await JS.InvokeAsync<bool>("confirm", question)) return;
+
+        await RunAsync(async () =>
+        {
+            await Catalog.DeleteAsync(usage.Tag.Id);
+            _message = $"Deleted {usage.Tag.Name}.";
+        });
+    }
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        _busy = true;
+        (_error, _message) = (null, null);
+        try
+        {
+            await action();
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

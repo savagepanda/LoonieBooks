@@ -1,0 +1,171 @@
+@using MapleLedger.Core.Investments
+@inject ListingRequests Requests
+@inject QuoteFeed Prices
+
+@* Under an account's holdings: where their prices came from and when, which aren't current and why,
+   a button to ask stocktreemap.com for the listings it doesn't carry, and one to price options from Yahoo Finance. *@
+@if (Enabled)
+{
+    <div class="small text-body-secondary mt-2" role="status">
+        @if (Fetching)
+        {
+            <span>Getting prices from stocktreemap.com…</span>
+        }
+        else if (Refresh is { AsOf: null, Unreachable: true } r)
+        {
+            <span class="text-warning-emphasis">
+                Couldn't reach stocktreemap.com for prices.
+                @(r.LastPriced is { } last ? $"These are as last updated, {Display.Moment(last)}." : "These are the statement's.")
+            </span>
+        }
+        else if (Refresh is { AsOf: { } asOf } r2)
+        {
+            <span>
+                @(_priced == 1 ? "1 holding" : $"{_priced} holdings") priced from stocktreemap.com: prices as of @Display.Moment(asOf)@(r2.CheckedAt is { } at ? $", checked {Display.Moment(at)}" : "").
+            </span>
+            @if (_options > 0 && r2.OptionPrices)
+            {
+                <span>
+                    @(_optionsPriced == 1 ? "1 option" : $"{_optionsPriced} options") priced from Yahoo Finance.
+                    <button type="button" class="btn btn-link btn-sm p-0 align-baseline" title="Stop sending option symbols to Yahoo Finance" @onclick="() => SetOptionPricesAsync(false)">Stop</button>
+                </span>
+            }
+            @if (r2.Unreachable)
+            {
+                <span class="text-warning-emphasis">Couldn't reach it just now, so these are from that check.</span>
+            }
+            @if (r2.FeedStale)
+            {
+                <span class="text-warning-emphasis">stocktreemap.com hasn't updated its prices since @Display.Moment(asOf).</span>
+            }
+            @if (r2.SaveFailed)
+            {
+                <span class="text-warning-emphasis">Saving the prices failed; they're as last saved.</span>
+            }
+        }
+        @if (!Fetching)
+        {
+            <button type="button" class="btn btn-link btn-sm p-0 ms-1 align-baseline" @onclick="OnRefresh">Refresh prices</button>
+        }
+
+        @if (!Fetching && _problems.Count > 0)
+        {
+            <details class="mt-1" open="@(_problems.Count <= 3 || _offer.Count > 0 || _optionOffer.Count > 0)">
+                <summary class="text-warning-emphasis">@(_problems.Count == 1 ? "1 holding isn't" : $"{_problems.Count} holdings aren't") updated from the feed</summary>
+                <ul class="mb-0">
+                    @foreach (var (m, problem, asked) in _problems)
+                    {
+                        <li>
+                            <span class="fw-semibold">@m.Holding.Label</span>: @problem@(m.QuoteSymbol is { } s && m.Miss == QuoteMiss.PriceLooksWrong ? $" ({s})" : "")
+                            @if (asked is not null)
+                            {
+                                <span class="text-body-tertiary">— @asked</span>
+                            }
+                        </li>
+                    }
+                </ul>
+                @if (_offer.Count > 0 && Requests.Enabled)
+                {
+                    <div class="mt-2 d-flex flex-wrap align-items-center gap-2">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" disabled="@_asking" @onclick="AskAsync">
+                            @(_asking ? "Asking…" : $"Ask stocktreemap.com to add {(_offer.Count == 1 ? _offer[0].Holding.Label : $"these {_offer.Count}")}")
+                        </button>
+                        <span class="text-body-tertiary">
+                            Sends only @(_offer.Count == 1 ? "this symbol" : "these symbols") (@string.Join(", ", _offer.Select(m => m.Holding.Label)))
+                            and @(_offer.Count == 1 ? "its" : "their") currency; nothing else about your ledger.
+                        </span>
+                    </div>
+                }
+                @if (_optionOffer.Count > 0 && Prices.OptionsUrl is not null)
+                {
+                    <div class="mt-2 d-flex flex-wrap align-items-center gap-2">
+                        <button type="button" class="btn btn-outline-secondary btn-sm" @onclick="() => SetOptionPricesAsync(true)">
+                            Get option prices from Yahoo Finance
+                        </button>
+                        <span class="text-body-tertiary">
+                            Sends only the option @(_optionOffer.Count == 1 ? "contract" : "contracts")
+                            (@string.Join(", ", _optionOffer.Select(m => m.Holding.Option!.OccSymbol))) to Yahoo Finance, through this site's server;
+                            nothing else about your ledger. This browser remembers the choice.
+                        </span>
+                    </div>
+                }
+            </details>
+        }
+        @if (_askResult is not null)
+        {
+            <div class="mt-1 @(_askFailed ? "text-warning-emphasis" : "")">@_askResult</div>
+        }
+    </div>
+}
+
+@code {
+    /// <summary>The last refresh; null before the first.</summary>
+    [Parameter] public QuoteRefresh? Refresh { get; set; }
+
+    [Parameter] public bool Fetching { get; set; }
+
+    [Parameter] public bool Enabled { get; set; }
+
+    /// <summary>The account whose holdings these are.</summary>
+    [Parameter, EditorRequired] public string AccountId { get; set; } = "";
+
+    /// <summary>Refresh the prices (the button, and after stocktreemap.com added listings).</summary>
+    [Parameter] public EventCallback OnRefresh { get; set; }
+
+    private int _priced;
+    private int _options;
+    private int _optionsPriced;
+    private List<QuoteMatch> _optionOffer = [];
+    private List<(QuoteMatch Match, string Problem, string? Asked)> _problems = [];
+    private List<QuoteMatch> _offer = [];
+    private bool _asking;
+    private string? _askResult;
+    private bool _askFailed;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var mine = Refresh?.For(AccountId) ?? [];
+        var outcomes = await Requests.GetOutcomesAsync();
+        _priced = mine.Count(m => m.Priced && m.Holding.Option is null);
+        _options = mine.Count(m => m.Holding.Option is not null);
+        _optionsPriced = mine.Count(m => m.Priced && m.Holding.Option is not null);
+        _optionOffer = mine.Where(QuoteRefresh.AwaitsOptionPrices).DistinctBy(m => m.Holding.Option!.OccSymbol).ToList();
+        _problems = mine
+            .Select(m => (m, Problem: QuoteRefresh.Problem(m)))
+            .Where(p => p.Problem is not null)
+            .Select(p => (p.m, p.Problem!, ListingRequests.CanAsk(p.m) && outcomes.TryGetValue((p.m.Holding.Symbol!, p.m.Holding.Currency), out var o) ? ListingRequests.Describe(o) : null))
+            .ToList();
+        _offer = mine.Where(m => ListingRequests.ShouldOffer(m, outcomes)).DistinctBy(m => (m.Holding.Symbol, m.Holding.Currency)).Take(ListingRequests.MaxPerRequest).ToList();
+    }
+
+    private async Task AskAsync()
+    {
+        _asking = true;
+        _askResult = null;
+        try
+        {
+            var summary = await Requests.RequestAsync(_offer);
+            _askFailed = summary.Error is not null;
+            _askResult = summary.Error ?? (summary.Found, summary.NotFound) switch
+            {
+                (> 0, 0) => $"stocktreemap.com added {Count(summary.Found)}; {(summary.Found == 1 ? "its price is" : "their prices are")} saved.",
+                (> 0, _) => $"stocktreemap.com added {Count(summary.Found)} and couldn't find {Count(summary.NotFound)}.",
+                _ => $"stocktreemap.com couldn't find {(summary.NotFound == 1 ? "it" : "them")}.",
+            };
+        }
+        finally
+        {
+            _asking = false;
+        }
+
+        await OnRefresh.InvokeAsync();
+    }
+
+    private async Task SetOptionPricesAsync(bool on)
+    {
+        await Prices.SetOptionPricesAsync(on);
+        await OnRefresh.InvokeAsync();
+    }
+
+    private static string Count(int n) => n == 1 ? "1 holding" : $"{n} holdings";
+}

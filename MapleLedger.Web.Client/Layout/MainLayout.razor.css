@@ -1,0 +1,256 @@
+/* The app frame, after StockTreeMap's Radzen Material layout. Colours are the --ml-* tokens in
+   app.css, so the frame follows the light/dark setting with the rest of the page. The window
+   scrolls (not an inner panel), so the header, menu and footer are sticky. */
+
+.ml-shell {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--ml-page-bg);
+}
+
+/* ---- header */
+
+.ml-header {
+    position: sticky;
+    top: 0;
+    z-index: 1030;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    height: var(--ml-header-height);
+    padding: 0 0.5rem 0 0.25rem;
+    background: var(--ml-header-bg);
+    color: var(--ml-header-fg);
+    box-shadow: 0 4px 5px 0 rgba(0, 0, 0, 0.14), 0 1px 10px 0 rgba(0, 0, 0, 0.12), 0 2px 4px 0 rgba(0, 0, 0, 0.14);
+}
+
+.ml-menu-button {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.75rem;
+    height: 2.75rem;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: none;
+    color: inherit;
+}
+
+    .ml-menu-button:hover {
+        background: rgba(0, 0, 0, 0.08);
+    }
+
+    .ml-menu-button svg {
+        width: 24px;
+        height: 24px;
+        fill: currentColor;
+    }
+
+.ml-brand {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.25rem 0.25rem;
+    color: inherit;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.ml-flag {
+    width: 2rem;
+    height: 1rem;
+    flex: none;
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18), 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.ml-brand-name {
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.ml-header-actions {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.75rem;
+    font-size: 0.875rem;
+}
+
+.ml-storage {
+    color: inherit;
+    opacity: 0.8;
+    text-decoration: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+    .ml-storage:hover {
+        opacity: 1;
+        text-decoration: underline;
+    }
+
+.ml-user {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 16rem;
+}
+
+.ml-header-actions ::deep .ml-header-link {
+    color: inherit;
+    padding: 0.2rem 0.4rem;
+    text-decoration: none;
+}
+
+    .ml-header-actions ::deep .ml-header-link:hover {
+        background: rgba(0, 0, 0, 0.08);
+    }
+
+/* The header is coloured, so its outline buttons are drawn in the header's own colour. */
+.ml-header-actions ::deep .btn-outline-primary {
+    --bs-btn-color: var(--ml-header-fg);
+    --bs-btn-border-color: var(--ml-header-fg);
+    --bs-btn-hover-color: var(--ml-header-bg);
+    --bs-btn-hover-bg: var(--ml-header-fg);
+    --bs-btn-hover-border-color: var(--ml-header-fg);
+    white-space: nowrap;
+}
+
+.ml-sign-in {
+    white-space: nowrap;
+}
+
+/* ---- menu and page */
+
+.ml-frame {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+}
+
+.ml-sidebar {
+    flex: none;
+    width: var(--ml-sidebar-width);
+    position: sticky;
+    top: var(--ml-header-height);
+    align-self: flex-start;
+    height: calc(100vh - var(--ml-header-height) - var(--ml-footer-height));
+    overflow-y: auto;
+    background: var(--ml-surface);
+    border-right: 1px solid var(--ml-border);
+}
+
+.ml-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.ml-backdrop {
+    display: none;
+}
+
+.ml-shell.nav-toggled .ml-sidebar {
+    display: none;
+}
+
+/* Phones: the menu is hidden until the menu button opens it over the page. */
+@media (max-width: 767.98px) {
+    .ml-sidebar {
+        display: none;
+        position: fixed;
+        top: var(--ml-header-height);
+        bottom: 0;
+        left: 0;
+        z-index: 1026;
+        align-self: auto; /* flex-start would size a fixed box to its content instead of top-to-bottom */
+        height: auto;
+        width: min(var(--ml-sidebar-width), 85vw);
+        box-shadow: 0 8px 10px 1px rgba(0, 0, 0, 0.14), 0 3px 14px 2px rgba(0, 0, 0, 0.12);
+    }
+
+    .ml-shell.nav-toggled .ml-sidebar {
+        display: block;
+    }
+
+    .ml-shell.nav-toggled .ml-backdrop {
+        display: block;
+        position: fixed;
+        inset: var(--ml-header-height) 0 0 0;
+        z-index: 1025;
+        background: rgba(0, 0, 0, 0.32);
+    }
+}
+
+/* ---- footer */
+
+.ml-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 1020;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.25rem 1rem;
+    min-height: var(--ml-footer-height);
+    padding: 0.25rem 0.75rem;
+    background: var(--ml-header-bg);
+    color: var(--ml-header-fg);
+    font-size: 0.75rem;
+}
+
+.ml-disclaimer {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    opacity: 0.85;
+}
+
+    .ml-disclaimer svg {
+        width: 0.9rem;
+        height: 0.9rem;
+        fill: currentColor;
+        flex: none;
+    }
+
+.ml-footer-links {
+    display: inline-flex;
+    gap: 1rem;
+    font-size: 0.85rem;
+}
+
+    .ml-footer-links a {
+        color: inherit;
+    }
+
+/* ---- unhandled-error bar */
+
+#blazor-error-ui {
+    color-scheme: light only;
+    background: lightyellow;
+    bottom: 0;
+    box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.2);
+    box-sizing: border-box;
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem 0.7rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 1050; /* above the sticky footer */
+}
+
+    #blazor-error-ui .dismiss {
+        cursor: pointer;
+        position: absolute;
+        right: 0.75rem;
+        top: 0.5rem;
+    }

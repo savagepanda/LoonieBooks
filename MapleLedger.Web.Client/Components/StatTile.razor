@@ -1,0 +1,20 @@
+<div class="stat-tile card h-100">
+    <div class="card-body">
+        <div class="stat-label">@Label</div>
+        @* The detail sits beside the value (wrapping under it only when the tile is too narrow),
+           so a tile is two lines tall. *@
+        <div class="stat-line">
+            <span class="stat-value">@Value</span>
+            @if (!string.IsNullOrEmpty(Detail))
+            {
+                <span class="stat-detail">@Detail</span>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+    [Parameter, EditorRequired] public string Value { get; set; } = "";
+    [Parameter] public string? Detail { get; set; }
+}

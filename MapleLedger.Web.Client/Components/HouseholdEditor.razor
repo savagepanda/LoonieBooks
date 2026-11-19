@@ -1,0 +1,79 @@
+@* The people tax claims can be assigned to: add, rename, remove. *@
+@inject ILedgerStore Store
+@inject IJSRuntime JS
+
+<ul class="list-unstyled mb-2">
+    @foreach (var member in Members)
+    {
+        <li class="d-flex flex-wrap align-items-center gap-2 mb-1" @key="member.Id">
+            @if (_editingId == member.Id)
+            {
+                <input class="form-control form-control-sm w-auto" aria-label="Name" maxlength="@HouseholdMember.MaxNameLength" @bind="_editName" />
+                <button class="btn btn-sm btn-primary" @onclick="() => RenameAsync(member)" disabled="@_busy">Save</button>
+                <button class="btn btn-sm btn-link" @onclick="() => _editingId = null">Cancel</button>
+            }
+            else
+            {
+                <span>@member.Name</span>
+                <button class="btn btn-sm btn-link p-0" @onclick="() => (_editingId, _editName) = (member.Id, member.Name)" disabled="@_busy">Rename</button>
+                <button class="btn btn-sm btn-link p-0 text-danger" @onclick="() => RemoveAsync(member)" disabled="@_busy">Remove</button>
+            }
+        </li>
+    }
+</ul>
+
+<form class="d-flex flex-wrap gap-2" @onsubmit="AddAsync" @onsubmit:preventDefault>
+    <input class="form-control form-control-sm w-auto" placeholder="Name, e.g. Alex" aria-label="New household member" maxlength="@HouseholdMember.MaxNameLength" @bind="_newName" />
+    <button type="submit" class="btn btn-sm btn-outline-primary" disabled="@(_busy || string.IsNullOrWhiteSpace(_newName))">Add person</button>
+</form>
+@if (_error is not null)
+{
+    <div class="small text-danger mt-1">@_error</div>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<HouseholdMember> Members { get; set; } = [];
+
+    /// <summary>Raised after the household changes.</summary>
+    [Parameter] public EventCallback Changed { get; set; }
+
+    private string? _newName, _editName, _editingId, _error;
+    private bool _busy;
+
+    private Task AddAsync() => RunAsync(async () =>
+    {
+        await Store.AddHouseholdMemberAsync(_newName ?? "");
+        _newName = null;
+    });
+
+    private Task RenameAsync(HouseholdMember member) => RunAsync(async () =>
+    {
+        await Store.RenameHouseholdMemberAsync(member.Id, _editName ?? "");
+        _editingId = null;
+    });
+
+    private async Task RemoveAsync(HouseholdMember member)
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", $"Remove {member.Name} from the household? Claims assigned to them become unassigned.")) return;
+        await RunAsync(() => Store.DeleteHouseholdMemberAsync(member.Id));
+    }
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            await action();
+            await Changed.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

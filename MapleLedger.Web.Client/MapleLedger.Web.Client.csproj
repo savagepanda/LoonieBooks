@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <NoDefaultLaunchSettingsFile>true</NoDefaultLaunchSettingsFile>
+    <StaticWebAssetProjectMode>Default</StaticWebAssetProjectMode>
+    <BlazorDisableThrowNavigationException>true</BlazorDisableThrowNavigationException>
+    <!-- SqliteWasmBlazor links a small native SQLite stub into the .NET WebAssembly runtime, so the
+         runtime is relinked on build. Needs the .NET WebAssembly build tools:
+         dotnet workload install wasm-tools   (from an elevated terminal) -->
+    <WasmBuildNative>true</WasmBuildNative>
+    <!-- WASM0001: SQLitePCLRaw declares imports for SQLite's varargs functions (sqlite3_config,
+         sqlite3_db_config), which WebAssembly can't call. Nothing on the browser's path calls them;
+         setting a global SQLite option in the client would fail at runtime. -->
+    <NoWarn>$(NoWarn);WASM0001</NoWarn>
+    <!-- SqliteWasmBlazor sets the culture from the browser's language during startup, which Blazor
+         only allows when all globalization data is loaded (its own samples do the same). -->
+    <BlazorWebAssemblyLoadAllGlobalizationData>true</BlazorWebAssemblyLoadAllGlobalizationData>
+  </PropertyGroup>
+
+  <!-- The static site (site\publish.ps1): this client on its own, served as plain files with no web host
+       (SiteInfo.HasWebHost is false). Its hand-written index.html names the framework files directly, so
+       they keep their plain names instead of fingerprinted ones that only an import map could find. -->
+  <PropertyGroup Condition="'$(StaticSite)' == 'true'">
+    <DefineConstants>$(DefineConstants);STATIC_SITE</DefineConstants>
+    <WasmFingerprintAssets>false</WasmFingerprintAssets>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.12" />
+    <PackageReference Include="SqliteWasmBlazor" Version="0.9.4-pre" />
+    <!-- Pin: SqliteWasmBlazor 0.9.4-pre (latest) pulls MessagePack 3.1.8 (GHSA-qhrr-8q5h-9q3h).
+         Drop once SqliteWasmBlazor depends on 3.1.9 or later. -->
+    <PackageReference Include="MessagePack" Version="3.1.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MapleLedger.Core\MapleLedger.Core.csproj" />
+    <ProjectReference Include="..\MapleLedger.Data\MapleLedger.Data.csproj" />
+  </ItemGroup>
+
+</Project>

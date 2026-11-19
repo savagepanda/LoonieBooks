@@ -1,0 +1,122 @@
+@using System.Globalization
+@using MapleLedger.Core.Investments
+
+@* The dashboard panel's view of one holding (picked from Assets, by holding): what it's worth in all,
+   then each account it's in, with the account's own figures for it. Values in Canadian dollars, with
+   the original amount beside any in another currency. *@
+<div class="holding-details">
+    <div class="mb-2">
+        <h3 class="h5 mb-0">@Label</h3>
+        @if (Description is { } description)
+        {
+            <div class="small text-body-secondary">@description</div>
+        }
+    </div>
+
+    <dl class="holding-summary small mb-3">
+        <div><dt>Market value</dt><dd>@Money.Format(_total)</dd></div>
+        @if (_quantity is { } quantity)
+        {
+            <div><dt>Quantity</dt><dd>@Number(quantity)</dd></div>
+        }
+        @if (_book is { } book)
+        {
+            <div><dt>Book value</dt><dd>@Money.Format(book)</dd></div>
+            <div><dt>Gain</dt><dd class="@(_total - book < 0 ? "text-danger" : "")">@Money.FormatSigned(_total - book)@(book > 0 ? $" ({Percent((_total - book) / book)})" : "")</dd></div>
+        }
+    </dl>
+
+    <h4 class="h6">Held in @(Places.Select(p => p.AccountId).Distinct().Count() == 1 ? "1 account" : $"{Places.Select(p => p.AccountId).Distinct().Count()} accounts")</h4>
+    <ul class="list-unstyled mb-2">
+        @foreach (var place in Places.OrderByDescending(p => p.Holding.MarketValueCad))
+        {
+            var h = place.Holding;
+            var foreign = h.Currency != Holding.Cad;
+            <li class="holding-place">
+                <div class="d-flex gap-2 align-items-baseline">
+                    <a class="fw-semibold text-truncate" href="@($"holdings?accountId={Uri.EscapeDataString(place.AccountId)}")" title="This account's holdings">@place.AccountName</a>
+                    <span class="ms-auto fw-semibold text-nowrap">@Money.Format(h.MarketValueCad)</span>
+                </div>
+                @if (foreign || h.Quantity is not null)
+                {
+                    <div class="small text-body-secondary d-flex gap-2">
+                        <span>
+                            @if (h.Quantity is { } q)
+                            {
+                                @Units(h, q)
+                            }
+                        </span>
+                        @if (foreign)
+                        {
+                            <span class="ms-auto text-nowrap">@Money.Format(h.MarketValue, h.Currency)</span>
+                        }
+                    </div>
+                }
+                @if (h.BookValueCad is { } bookCad)
+                {
+                    <div class="small">
+                        Book @Money.Format(bookCad) ·
+                        <span class="@(h.GainCad < 0 ? "text-danger" : "")">@Money.FormatSigned(h.GainCad!.Value)@(bookCad > 0 ? $" ({Percent(h.GainCad.Value / bookCad)})" : "")</span>
+                    </div>
+                }
+                <div class="small text-body-secondary">
+                    @Shares(place)
+                </div>
+                <div class="small text-body-secondary">
+                    @(place.Institution is { Length: > 0 } institution ? $"{institution} · " : "")as of @Display.Date(place.AsOf)
+                </div>
+            </li>
+        }
+    </ul>
+    <p class="small text-body-secondary mb-0">
+        From each account's latest import. Book value and gains are as your broker reports them, for keeping track; they
+        aren't adjusted cost base and aren't tax or investment advice.
+    </p>
+</div>
+
+@code {
+    /// <summary>One account's position in the holding.</summary>
+    /// <param name="AccountTotalCad">Everything the account holds, in Canadian dollars, for the holding's share of it.</param>
+    public sealed record Place(string AccountId, string AccountName, string? Institution, DateOnly AsOf, Holding Holding, decimal AccountTotalCad);
+
+    [Parameter, EditorRequired] public string Label { get; set; } = "";
+
+    [Parameter, EditorRequired] public IReadOnlyList<Place> Places { get; set; } = [];
+
+    private string? Description => Places.Select(p => p.Holding).FirstOrDefault(h => h.Symbol is not null && h.Description is not null)?.Description;
+
+    private decimal _total;
+    private decimal? _quantity, _book;
+
+    protected override void OnParametersSet()
+    {
+        _total = Places.Sum(p => p.Holding.MarketValueCad);
+        // Units add up only when every position has them; book value only when every position reports one.
+        _quantity = Places.All(p => p.Holding.Quantity is not null) ? Places.Sum(p => p.Holding.Quantity!.Value) : null;
+        _book = Places.All(p => p.Holding.BookValue is not null) ? Places.Sum(p => p.Holding.BookValueCad!.Value) : null;
+    }
+
+    /// <summary>The position's share of the holding (when it's in more than one place) and of its account.</summary>
+    private string Shares(Place place)
+    {
+        var parts = new List<string>();
+        if (Places.Count > 1 && _total > 0) parts.Add($"{Percent(place.Holding.MarketValueCad / _total)} of this holding");
+        if (place.AccountTotalCad > 0) parts.Add($"{Percent(place.Holding.MarketValueCad / place.AccountTotalCad)} of the account");
+        return string.Join(" · ", parts);
+    }
+
+    internal static string Price(decimal price, string currency) =>
+        Money.FormatPrice(price, currency);
+
+    /// <summary>"200 at US$44.03"; an option says what its units are: "3 contracts at US$26.75 a share".</summary>
+    internal static string Units(Holding h, decimal quantity)
+    {
+        var option = h.Multiplier > 1;
+        var units = Number(quantity) + (option ? (quantity is 1 or -1 ? " contract" : " contracts") : "");
+        return h.Price is { } p ? $"{units} at {Price(p, h.Currency)}{(option ? " a share" : "")}" : units;
+    }
+
+    private static string Number(decimal value) => value.ToString("#,0.####", CultureInfo.InvariantCulture);
+
+    private static string Percent(decimal share) => share.ToString("0.0%", CultureInfo.InvariantCulture);
+}

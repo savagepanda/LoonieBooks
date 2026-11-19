@@ -1,0 +1,213 @@
+@page "/help"
+@using MapleLedger.Web.Client.Help
+@inject UserSession Session
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Help · LoonieBooks</PageTitle>
+
+<div class="help-page">
+    <header class="help-hero">
+        <div>
+            <h1 class="h3 mb-1">Help</h1>
+            <p class="text-body-secondary mb-0">
+                How to use every part of LoonieBooks. On any page, the
+                <span class="help-icon help-icon-help help-icon-inline" aria-hidden="true"></span> button at the top
+                opens the article about that page.
+            </p>
+        </div>
+        <div class="help-search">
+            <input class="form-control" type="search" placeholder="Search help, e.g. pdf, receipt, rrsp"
+                   aria-label="Search help articles" @ref="_searchBox"
+                   @bind="_search" @bind:event="oninput" @bind:after="Filter" @onkeydown="SearchKey" />
+        </div>
+    </header>
+
+    <div class="help-toolbar">
+        <div class="help-chips" role="group" aria-label="Show one section">
+            <button type="button" class="help-chip @(_category is null ? "is-on" : "")" aria-pressed="@(_category is null ? "true" : "false")"
+                    @onclick="() => SelectCategory(null)">
+                All <span class="help-chip-n">@_all.Count</span>
+            </button>
+            @foreach (var category in _categories)
+            {
+                var on = _category == category;
+                <button type="button" class="help-chip @(on ? "is-on" : "")" aria-pressed="@(on ? "true" : "false")"
+                        @onclick="() => SelectCategory(category)">
+                    @category <span class="help-chip-n">@_all.Count(a => a.Category == category)</span>
+                </button>
+            }
+        </div>
+        <div class="help-toolbar-right">
+            <span class="small text-body-secondary" role="status">@ResultLabel</span>
+            @if (_results.Count > 0)
+            {
+                <button type="button" class="btn btn-sm btn-link p-0" @onclick="ToggleAll">@(AllOpen ? "Collapse all" : "Expand all")</button>
+            }
+        </div>
+    </div>
+
+    @if (_results.Count == 0)
+    {
+        <div class="alert alert-secondary">
+            No articles match <strong>@_search.Trim()</strong>. Try one short word, such as <em>pdf</em>, <em>receipt</em>
+            or <em>backup</em>, or <button type="button" class="btn btn-link p-0 align-baseline" @onclick="ClearSearch">clear the search</button>.
+        </div>
+    }
+    else
+    {
+        @foreach (var group in _results.GroupBy(a => a.Category))
+        {
+            <h2 class="help-group">@group.Key</h2>
+            @foreach (var article in group)
+            {
+                var open = _open.Contains(article.Id);
+                <section class="card help-card @(open ? "is-open" : "")" id="help-@article.Id" @key="article.Id">
+                    <button type="button" class="help-card-head" aria-expanded="@(open ? "true" : "false")" aria-controls="help-body-@article.Id"
+                            @onclick="() => Toggle(article.Id)">
+                        <span class="help-icon help-icon-@article.Icon" aria-hidden="true"></span>
+                        <span class="help-card-text">
+                            <span class="help-card-title">@article.Title</span>
+                            <span class="help-card-summary">@article.Summary</span>
+                        </span>
+                        <span class="help-card-chevron" aria-hidden="true"></span>
+                    </button>
+                    @if (open)
+                    {
+                        <div class="card-body help-card-body" id="help-body-@article.Id">
+                            <DynamicComponent Type="article.ComponentType" />
+                            @if (article.Path is { } path)
+                            {
+                                <p class="help-go"><a href="@Href(path)">Open @article.PathLabel →</a></p>
+                            }
+                        </div>
+                    }
+                </section>
+            }
+        }
+    }
+</div>
+
+@code {
+    /// <summary>Opens one article, e.g. <c>help?a=statement-files</c> from a link inside another article.</summary>
+    [SupplyParameterFromQuery(Name = "a")] public string? ArticleId { get; set; }
+
+    /// <summary>Starts with a search, e.g. <c>help?q=rrsp</c>.</summary>
+    [SupplyParameterFromQuery(Name = "q")] public string? Query { get; set; }
+
+    private IReadOnlyList<HelpArticleEntry> _all = [];
+    private IReadOnlyList<string> _categories = [];
+    private List<HelpArticleEntry> _results = [];
+    private readonly HashSet<string> _open = new(StringComparer.OrdinalIgnoreCase);
+    private string _search = string.Empty;
+    private string? _category;
+    private string? _scrollTo;
+    private ElementReference _searchBox;
+    private IJSObjectReference? _module;
+
+    private bool AllOpen => _results.Count > 0 && _results.All(a => _open.Contains(a.Id));
+
+    private string ResultLabel
+    {
+        get
+        {
+            var noun = _results.Count == 1 ? "article" : "articles";
+            if (_search.Trim() is { Length: > 0 } term) return $"{_results.Count} {noun} matching “{term}”";
+            return _category is null ? $"All {_results.Count} {noun}" : $"{_results.Count} {noun}";
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        _all = HelpCatalog.GetArticles(Session.IsDesktop);
+        _categories = HelpCatalog.GetCategories(Session.IsDesktop);
+    }
+
+    // Runs again when a link inside an open article points at another one (same page, new query).
+    protected override void OnParametersSet()
+    {
+        if (!string.IsNullOrWhiteSpace(Query))
+            _search = Query;
+
+        if (HelpCatalog.Find(ArticleId) is { } article && _all.Contains(article))
+        {
+            _search = string.Empty;
+            _category = null;
+            _open.Add(article.Id);
+            _scrollTo = article.Id;
+        }
+        Filter();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/help.js");
+        if (_scrollTo is { } id)
+        {
+            _scrollTo = null;
+            await _module.InvokeVoidAsync("scrollToId", $"help-{id}");
+        }
+        else if (firstRender && string.IsNullOrEmpty(ArticleId) && await _module.InvokeAsync<bool>("hasFinePointer"))
+        {
+            await _searchBox.FocusAsync();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_module is not null) await _module.DisposeAsync();
+        }
+        catch (JSDisconnectedException) { }
+    }
+
+    private void Filter()
+    {
+        IEnumerable<HelpArticleEntry> query = _all;
+        if (_category is not null)
+            query = query.Where(a => a.Category == _category);
+        if (!string.IsNullOrWhiteSpace(_search))
+            query = query.Where(a => HelpCatalog.Matches(a, _search));
+        _results = query.ToList();
+
+        // One match isn't a list to choose from, it's the answer.
+        if (!string.IsNullOrWhiteSpace(_search) && _results.Count == 1)
+            _open.Add(_results[0].Id);
+    }
+
+    private void SearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") ClearSearch();
+    }
+
+    private void ClearSearch()
+    {
+        _search = string.Empty;
+        Filter();
+    }
+
+    private void SelectCategory(string? category)
+    {
+        _category = _category == category ? null : category;
+        Filter();
+    }
+
+    private void Toggle(string id)
+    {
+        if (!_open.Remove(id)) _open.Add(id);
+    }
+
+    private void ToggleAll()
+    {
+        var open = !AllOpen;
+        foreach (var article in _results)
+        {
+            if (open) _open.Add(article.Id);
+            else _open.Remove(article.Id);
+        }
+    }
+
+    // Links are relative to the app's base address, like the menu's.
+    private static string Href(string path) => path.TrimStart('/') is { Length: > 0 } relative ? relative : "./";
+}

@@ -1,0 +1,75 @@
+name: mapleledger
+services:
+  env-dashboard:
+    image: "mcr.microsoft.com/dotnet/nightly/aspire-dashboard:latest"
+    ports:
+      - "18888"
+    expose:
+      - "18889"
+      - "18890"
+    networks:
+      - "aspire"
+    restart: "always"
+  ledger-api:
+    image: "${LEDGER_API_IMAGE}"
+    environment:
+      OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY: "in_memory"
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      HTTP_PORTS: "${LEDGER_API_PORT}"
+      # SQL authentication to the host's SQL Server via host.docker.internal - see README.
+      ConnectionStrings__mapleledger: "${DOCKERDBCONNECTIONSTRING}"
+      # Shared with ledger-web: the API only accepts requests carrying a token signed with it.
+      Auth__SigningKey: "${LEDGER_API_SIGNING_KEY}"
+      # Registered users with these emails get premium (server storage) automatically.
+      Premium__Emails: "${PREMIUM_EMAILS}"
+      # Optional: lets premium users have receipts read by Claude. Empty turns the feature off.
+      Anthropic__ApiKey: "${ANTHROPIC_API_KEY:-}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://env-dashboard:18889"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      OTEL_SERVICE_NAME: "ledger-api"
+    expose:
+      - "${LEDGER_API_PORT}"
+    networks:
+      - "aspire"
+    restart: "always"
+  ledger-web:
+    image: "${LEDGER_WEB_IMAGE}"
+    environment:
+      OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY: "in_memory"
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      HTTP_PORTS: "${LEDGER_WEB_PORT}"
+      LEDGER_API_HTTP: "http://ledger-api:${LEDGER_API_PORT}"
+      services__ledger-api__http__0: "http://ledger-api:${LEDGER_API_PORT}"
+      Auth__SigningKey: "${LEDGER_API_SIGNING_KEY}"
+      # Google sign-in. Leave empty to run without sign-in (everyone stores data in their browser).
+      Authentication__Google__ClientId: "${GOOGLE_CLIENT_ID}"
+      Authentication__Google__ClientSecret: "${GOOGLE_CLIENT_SECRET}"
+      # "Send from phone" on the receipt scanner: the address phones use to reach this site on
+      # your network, e.g. http://192.168.1.20:7080. Not needed when you open the site by its
+      # public (tunnel) hostname, which phones can use too.
+      ReceiptRelay__BaseUrl: "${RECEIPT_RELAY_URL:-}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://env-dashboard:18889"
+      OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+      OTEL_SERVICE_NAME: "ledger-web"
+      # Somewhere for the data protection key ring to live that a container recreate does not
+      # take with it - see the note in MapleLedger.Web/Program.cs.
+      DataProtection__KeyRingPath: "/home/app/keys"
+    volumes:
+      # Mounted on the home directory rather than a path of its own: the container runs as the
+      # non-root "app" user, and a fresh named volume only inherits an owner when the directory
+      # it covers already exists in the image. A volume at /keys arrives owned by root and the
+      # app cannot write its key ring into it.
+      - "ledger-web-keys:/home/app"
+    ports:
+      - "${LEDGER_WEB_PORT}:${LEDGER_WEB_PORT}"
+    depends_on:
+      ledger-api:
+        condition: "service_started"
+    networks:
+      - "aspire"
+    restart: "always"
+volumes:
+  ledger-web-keys:
+networks:
+  aspire:
+    driver: "bridge"

@@ -1,0 +1,169 @@
+@* A line: one value at the end of each month (one series, so the title names it and there's no legend).
+   The scale fits the values rather than starting at zero, so a year's change shows; a zero line is drawn
+   when the values cross it. Each month's band carries a hover tooltip with its numbers; clicking a month
+   selects it (clicking it again clears it). Net worth and an account's value by month are drawn with it. *@
+
+@* The title row, a one-line row under it and the plot (or a message as tall as it): the same
+   height whatever is shown, and the same as the cash flow chart's, so switching doesn't resize the card. *@
+<div class="viz-root">
+    <div class="viz-head">
+        <h2 class="h6 card-title mb-0">@Title</h2>
+        @HeaderContent
+    </div>
+    <div class="viz-subline" title="@(Message is null && Points.Count > 1 ? Change() : null)">
+        @if (Message is null && Points.Count > 0)
+        {
+            @Change()
+            @if (Note is not null)
+            {
+                @(Points.Count > 1 ? " · " : "")<abbr title="@NoteTitle">@Note</abbr>
+            }
+        }
+    </div>
+
+    @if (Message is not null)
+    {
+        @* As tall as the chart would be, so the card doesn't change size. *@
+        <div class="viz-placeholder">
+            <div class="@(MessageIsError ? "alert alert-danger py-2 mb-0" : "text-body-secondary")">@Message</div>
+        </div>
+    }
+    else
+    {
+        <svg class="viz-svg" viewBox="0 0 @Width @Height" role="img" aria-label="@AriaLabel">
+            @foreach (var tick in _ticks)
+            {
+                var y = Y(tick);
+                <line class="@(tick == 0 && _ticks.Count > 1 && _ticks[0] < 0 ? "viz-baseline" : "viz-grid")" x1="@Display.Svg(_left)" x2="@Display.Svg(Width - Right)" y1="@Display.Svg(y)" y2="@Display.Svg(y)" />
+                @IncomeExpenseChart.Label(_left - 8, y + 4, "end", Money.FormatWhole(tick, Currency))
+            }
+
+            @for (var i = 0; i < Points.Count; i++)
+            {
+                var point = Points[i];
+                var bandX = _left + i * Band;
+                var selected = IsSelected(point);
+                <g class="viz-band @(Selectable ? "viz-link" : "") @(selected ? "is-selected" : "")" role="@(Selectable ? "button" : null)" tabindex="@(Selectable ? "0" : null)"
+                   aria-pressed="@(Selectable ? (selected ? "true" : "false") : null)"
+                   @onclick="() => Select(point)" @onkeydown="e => SelectOnEnter(e, point)">
+                    <title>@point.Tooltip@(!Selectable ? "" : selected ? ". Show all months again." : ". Show its transactions.")</title>
+                    <rect class="viz-hit" x="@Display.Svg(bandX)" y="@Display.Svg(Top)" width="@Display.Svg(Band)" height="@Display.Svg(PlotHeight)" />
+                </g>
+                @if (IncomeExpenseChart.ShowMonthLabel(Points.Count, i))
+                {
+                    @IncomeExpenseChart.Label(X(i), Height - 8, "middle", MonthLabel(i))
+                }
+            }
+
+            @if (Points.Count > 0)
+            {
+                <path class="viz-networth-line" d="@Line()" />
+                @for (var i = 0; i < Points.Count; i++)
+                {
+                    <circle class="viz-networth-dot" cx="@Display.Svg(X(i))" cy="@Display.Svg(Y(Points[i].Value))" r="4" />
+                }
+            }
+        </svg>
+    }
+</div>
+
+@code {
+    /// <summary>A month's value, with the tooltip its band shows.</summary>
+    public sealed record Point(int Year, int Month, decimal Value, string Tooltip);
+
+    // Keep in step with .viz-placeholder's aspect-ratio in app.css.
+    private const double Width = 720, Height = 170, Right = 12, Top = 10, Bottom = 24;
+    private const double PlotHeight = Height - Top - Bottom;
+
+    [Parameter, EditorRequired] public IReadOnlyList<Point> Points { get; set; } = [];
+
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+
+    /// <summary>Beside the title, such as a picker for what the line shows.</summary>
+    [Parameter] public RenderFragment? HeaderContent { get; set; }
+
+    [Parameter] public string AriaLabel { get; set; } = "Value at the end of each month";
+
+    /// <summary>The currency the values are in, for the axis.</summary>
+    [Parameter] public string Currency { get; set; } = Money.Cad;
+
+    /// <summary>Shown under the title in place of the chart (loading, or why there's nothing to draw).</summary>
+    [Parameter] public string? Message { get; set; }
+
+    [Parameter] public bool MessageIsError { get; set; }
+
+    /// <summary>After how much it moved, a word about the figures ("estimated"), explained by <see cref="NoteTitle"/> on hover.</summary>
+    [Parameter] public string? Note { get; set; }
+
+    [Parameter] public string? NoteTitle { get; set; }
+
+    /// <summary>The selected month, highlighted.</summary>
+    [Parameter] public (int Year, int Month)? Selected { get; set; }
+
+    /// <summary>A month was clicked: that month, or null when the selected month was clicked again. Unset leaves the chart unclickable.</summary>
+    [Parameter] public EventCallback<Point?> OnSelect { get; set; }
+
+    private bool Selectable => OnSelect.HasDelegate;
+
+    private bool IsSelected(Point point) => Selected is { } s && s.Year == point.Year && s.Month == point.Month;
+
+    private Task Select(Point point) => Selectable ? OnSelect.InvokeAsync(IsSelected(point) ? null : point) : Task.CompletedTask;
+
+    private Task SelectOnEnter(KeyboardEventArgs e, Point point) => e.Key is "Enter" or " " ? Select(point) : Task.CompletedTask;
+
+    private decimal _min, _max;
+    private double _left = 64;
+    private List<decimal> _ticks = [];
+
+    private double Band => (Width - _left - Right) / Math.Max(1, Points.Count);
+
+    private double X(int i) => _left + i * Band + Band / 2;
+
+    protected override void OnParametersSet()
+    {
+        var low = Points.Count == 0 ? 0 : Points.Min(p => p.Value);
+        var high = Points.Count == 0 ? 0 : Points.Max(p => p.Value);
+        if (high - low < 1000)
+        {
+            // A flat line: give it room above and below rather than a scale of cents.
+            var pad = Math.Max(1000, Math.Abs(high) / 100);
+            (low, high) = (low - pad, high + pad);
+        }
+
+        var step = IncomeExpenseChart.NiceStep((high - low) / 4);
+        _min = Math.Floor(low / step) * step;
+        _max = Math.Ceiling(high / step) * step;
+        _ticks = [];
+        for (var t = _min; t <= _max; t += step) _ticks.Add(t);
+
+        // Room for the longest axis label (a million-dollar figure is wider than the default margin).
+        _left = Math.Max(64, _ticks.Max(t => Money.FormatWhole(t, Currency).Length) * 6.4 + 12);
+    }
+
+    private double Y(decimal value) => Top + PlotHeight - (double)((value - _min) / (_max - _min)) * PlotHeight;
+
+    private string Line() => string.Join(" ", Points.Select((p, i) => $"{(i == 0 ? "M" : "L")}{Display.Svg(X(i))},{Display.Svg(Y(p.Value))}"));
+
+    private string MonthLabel(int i)
+    {
+        var p = Points[i];
+        var name = Display.Month(p.Year, p.Month);
+        return i == 0 || p.Month == 1 ? name : name[..3];
+    }
+
+    /// <summary>"End of October 2026", or "November 2026 (to Nov 18, 2026)" for the month still under way.</summary>
+    public static string When(int year, int month, DateOnly asOf)
+    {
+        var last = new DateOnly(year, month, 1).AddMonths(1).AddDays(-1);
+        return asOf < last ? $"{Display.Month(year, month)} (to {Display.Date(asOf)})" : $"End of {Display.Month(year, month)}";
+    }
+
+    /// <summary>Beside the title: how much it moved over the months shown.</summary>
+    private string Change()
+    {
+        var change = Math.Round(Points[^1].Value - Points[0].Value, 0);
+        var text = Money.FormatWhole(Math.Abs(change), Currency);
+        var since = $"since the end of {Display.Month(Points[0].Year, Points[0].Month)}";
+        return Points.Count < 2 ? "" : change == 0 ? $"Unchanged {since}" : $"{(change > 0 ? "Up" : "Down")} {text} {since}";
+    }
+}

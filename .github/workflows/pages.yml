@@ -1,0 +1,53 @@
+# The browser demo: builds the static site (site/publish.ps1) and puts it on GitHub Pages whenever a
+# release is published, so the demo always matches the latest download. Run it by hand from the
+# Actions tab to redeploy without a release.
+#
+# Settings > Pages > Source must be "GitHub Actions". The site is served under /<repo>/ on github.io;
+# with a custom domain (looniebooks.ca), set the repository variable SITE_BASE_HREF to /.
+name: Browser demo
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # SqliteWasmBlazor relinks the WebAssembly runtime, which needs the build tools.
+      - name: Install the WebAssembly build tools
+        run: dotnet workload install wasm-tools
+
+      - name: Build the static site
+        shell: pwsh
+        run: ./site/publish.ps1 -BaseHref '${{ vars.SITE_BASE_HREF || format('/{0}/', github.event.repository.name) }}'
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: artifacts/site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

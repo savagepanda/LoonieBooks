@@ -1,0 +1,72 @@
+<div class="help-article">
+    <p class="help-lead">
+        Besides pasting, the <a href="import">Import</a> page reads downloaded PDF statements and CSV exports, and pictures of a
+        statement: a screen capture, a screenshot, or a photo from a webcam or your phone. Whatever you give it is read in your
+        browser and turned into text in the <span class="help-ui">Pasted text</span> box, where you check it exactly as for a paste.
+    </p>
+
+    <h3>PDF statements and CSV exports</h3>
+    <ol>
+        <li>Choose the account first.</li>
+        <li>Drag the files onto <span class="help-ui">Drag statement files here</span>, or click it to browse. Several at once is fine, such as
+            all twelve months of a year; they're joined into one list.</li>
+        <li>Check the preview and import.</li>
+    </ol>
+    <ul>
+        <li>Most banks' PDF statements work, including ones that are locked against editing but open without a password.</li>
+        <li><strong>Can't be read:</strong> statements that need a password to open, a few with the strongest (AES-256) encryption,
+            and scanned statements (pictures of paper inside a PDF). For those, use pictures instead.</li>
+        <li>Several CSV files are joined under the first file's header row, so import one bank's exports at a time.</li>
+    </ul>
+
+    <h3>Mortgage and home equity line statements</h3>
+    <p>
+        A mortgage or home equity line (HELOC) statement gives what you owe as labelled figures, such as
+        <em>Closing Principal Balance</em>, rather than a balance column. The import page recognises these and shows a
+        <span class="help-ui">Loan statement</span> box with each part of what's owed:
+    </p>
+    <ul>
+        <li><strong>Each portion's balance.</strong> A TD Home Equity FlexLine has a revolving portion and one or more term (mortgage)
+            portions; each is listed. A negative revolving balance is a credit in your favour and lowers the total.</li>
+        <li><strong>Deferred interest.</strong> When a payment didn't cover all the interest, the statement shows the deferred interest
+            owing. It isn't included in the principal balance, so it's listed on its own and added to what you owe.</li>
+        <li>Untick a part you track in a separate account, such as a term portion kept as its own mortgage account.</li>
+    </ul>
+    <p>
+        Leave <span class="help-ui">Set account balance</span> ticked to make the account's balance the total as of the statement date.
+        The statement's payments appear in the preview as money in, each with its principal and interest in the description, filed
+        as a transfer: the payment's other side, in your chequing account, is where the spending shows. With no payments to import,
+        the button reads <span class="help-ui">Set balance</span>.
+    </p>
+    <p>
+        If the account already has a balance dated after the statement (for example, one you typed in when you added the account),
+        it's kept, and the result says so. Choose <span class="help-ui">Use the statement's balance</span> there to replace it.
+    </p>
+
+    <h3>Pictures of a statement</h3>
+    <ul>
+        <li><span class="help-ui">Capture screen</span>: open your bank's transactions in another window or tab first, then pick it when your
+            browser asks what to share. One capture is taken; scroll and capture again for more.</li>
+        <li><strong>Paste a screenshot</strong>: press <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>, select the transactions, then
+            <kbd>Ctrl</kbd>+<kbd>V</kbd> on the import page.</li>
+        <li><span class="help-ui">Use camera</span>: a webcam. Fill the frame with one page, flat and well lit, then <span class="help-ui">Take photo</span>.</li>
+        <li><span class="help-ui">Send from phone</span>: shows a QR code. Scan it with your phone's camera, take the photo there, and it
+            arrives here. Each code works once.</li>
+        <li><span class="help-ui">Choose pictures</span>: image files you already have (PNG, JPEG or WebP).</li>
+    </ul>
+    <p>
+        Add one picture per page or screenful. Each new picture is read, then the table in the box is rebuilt from all of
+        them together. <span class="help-ui">Start over</span> forgets the pictures so far.
+    </p>
+    <p class="help-caution">
+        Reading text from a picture can mistake a character, such as a 5 for a 6. Compare the amounts and the in/out totals with
+        your statement before importing.
+    </p>
+
+    <h3>If it reads nothing useful</h3>
+    <ul>
+        <li>Check the columns under the box: a misread heading row can turn amounts into descriptions.</li>
+        <li>For pictures, a sharper, straighter, larger image helps: zoom the bank page in before capturing.</li>
+        <li>Pasting the same page as text, when your bank allows it, is the most reliable route of all.</li>
+    </ul>
+</div>

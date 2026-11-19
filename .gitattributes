@@ -1,0 +1,7 @@
+* text=auto
+*.bat text eol=crlf
+*.sh text eol=lf
+
+
+# Vendored third-party assets: keep them byte-for-byte.
+**/wwwroot/lib/** -text -diff

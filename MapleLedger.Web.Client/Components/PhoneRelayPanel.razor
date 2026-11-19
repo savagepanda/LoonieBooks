@@ -1,0 +1,111 @@
+@implements IAsyncDisposable
+@inject PhoneRelay Relay
+@using MapleLedger.Core.Receipts
+
+@* "Send from phone": shows a one-time QR code and waits for the phone's photo. The page calls
+   StartAsync from its own button and gets the photo through OnReceived. *@
+
+@if (_relay is { } relay)
+{
+    <div class="border rounded p-3 mt-3 text-center phone-relay">
+        <div class="fw-semibold">Scan this with your phone's camera</div>
+        <div class="phone-relay-qr mx-auto my-2" role="img" aria-label="QR code for the phone upload page">@((MarkupString)relay.QrSvg)</div>
+        <div class="small text-body-secondary">
+            Your phone must be on the same Wi-Fi as this computer. The code works once, until
+            @relay.ExpiresAt.ToLocalTime().ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture).
+        </div>
+        <div class="small text-break mt-1"><code>@relay.UploadUrl</code></div>
+        <div class="small mt-2"><span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>Waiting for your phone…</div>
+        <button class="btn btn-sm btn-link" @onclick="CancelAsync">Cancel</button>
+    </div>
+}
+
+@code {
+    /// <summary>The photo (or PDF) the phone sent.</summary>
+    [Parameter] public EventCallback<RelayedReceipt> OnReceived { get; set; }
+
+    /// <summary>A message to show: the code couldn't be made, or it expired.</summary>
+    [Parameter] public EventCallback<string> OnError { get; set; }
+
+    /// <summary>The user cancelled: the page re-renders to enable its "Send from phone" button again.</summary>
+    [Parameter, EditorRequired] public EventCallback OnCancelled { get; set; }
+
+    private ReceiptRelaySession? _relay;
+    private CancellationTokenSource? _stop;
+
+    public bool IsWaiting => _relay is not null;
+
+    public async Task StartAsync()
+    {
+        if (_relay is not null) return;
+        try
+        {
+            _relay = await Relay.StartAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            await OnError.InvokeAsync(ex.Message);
+            return;
+        }
+
+        _stop = new CancellationTokenSource();
+        StateHasChanged();
+        _ = WaitForPhoneAsync(_relay, _stop.Token);
+    }
+
+    /// <summary>Checks every second and a half until the phone sends a photo, the code expires, or the user cancels.</summary>
+    private async Task WaitForPhoneAsync(ReceiptRelaySession relay, CancellationToken ct)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(1500, ct);
+                if (await Relay.CheckAsync(relay, ct) is not { } file) continue;
+
+                await InvokeAsync(async () =>
+                {
+                    _relay = null;
+                    StateHasChanged();
+                    await OnReceived.InvokeAsync(file);
+                });
+                return;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            await InvokeAsync(async () =>
+            {
+                _relay = null;
+                StateHasChanged();
+                await OnError.InvokeAsync(ex.Message);
+            });
+        }
+    }
+
+    private async Task CancelAsync()
+    {
+        await StopAsync();
+        await OnCancelled.InvokeAsync();
+    }
+
+    /// <summary>Stops waiting and closes the code, e.g. when the page switches to the camera.</summary>
+    public async Task StopAsync()
+    {
+        _stop?.Cancel();
+        if (_relay is { } relay)
+        {
+            _relay = null;
+            await Relay.CancelAsync(relay);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await StopAsync();
+        _stop?.Dispose();
+    }
+}

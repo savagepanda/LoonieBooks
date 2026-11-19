@@ -1,0 +1,1264 @@
+@page "/"
+@using MapleLedger.Core.Investments
+@using MapleLedger.Core.RealEstate
+@inject ILedgerStore Store
+@inject Preferences Preferences
+@inject QuoteFeed Prices
+@inject HpiFeed Hpi
+@inject PriceHistoryFeed PriceHistory
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>Dashboard · LoonieBooks</PageTitle>
+
+<div class="dashboard">
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <h1 class="h3 mb-0">Dashboard</h1>
+    <div class="d-flex flex-wrap gap-2">
+        @if (_accounts is { Count: > 1 })
+        {
+            <div class="dashboard-accounts"><AccountFilter Accounts="_accounts" Selected="_accountIds" SelectedChanged="ChangeAccountsAsync" /></div>
+        }
+        @* Everything below (totals, chart, bars, transactions) covers only the picked tags; net worth stays whole. *@
+        <div class="dashboard-tags"><TagPicker Filter="true" Selected="_tagIds" SelectedChanged="ChangeTagsAsync" /></div>
+        <select class="form-select w-auto" aria-label="Period" value="@_period.Key" @onchange="ChangePeriod">
+            @foreach (var p in _periods)
+            {
+                <option value="@p.Key">@p.Label</option>
+            }
+        </select>
+    </div>
+</div>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+else if (_summary is null || _accounts is null)
+{
+    <p class="text-body-secondary">Loading…</p>
+}
+else if (_accounts.Count == 0)
+{
+    <div class="card">
+        <div class="card-body">
+            <h2 class="h5">Welcome to LoonieBooks</h2>
+            <p>Start by adding the accounts you want to track, then paste in transactions copied from your bank's website.</p>
+            @if (Store.Location == StorageLocation.Browser)
+            {
+                <p class="small text-body-secondary">Your ledger is stored privately in this browser. <a href="data">Learn how to back it up.</a></p>
+            }
+            <a class="btn btn-primary me-2" href="accounts">Add an account</a>
+            <a class="btn btn-outline-secondary" href="import">Import transactions</a>
+        </div>
+    </div>
+}
+else
+{
+    <DuplicatesNotice />
+    <div class="row g-3 mb-3">
+        <div class="col-6 col-lg-3"><StatTile Label="Income" Value="@Money.FormatWhole(_summary.Income)" Detail="@_period.Label" /></div>
+        <div class="col-6 col-lg-3"><StatTile Label="Spending" Value="@Money.FormatWhole(_summary.Expenses)" Detail="Transfers excluded" /></div>
+        <div class="col-6 col-lg-3"><StatTile Label="Net cash flow" Value="@NetText()" Detail="@SavingsRate()" /></div>
+        <div class="col-6 col-lg-3"><StatTile Label="Net worth" Value="@Money.FormatWhole(_summary.NetWorth.NetWorth)" Detail="@NetWorthDetail(_summary.NetWorth)" /></div>
+    </div>
+    <PriceNotice Refresh="_prices" Accounts="_accounts" />
+
+    @* Laid out to fit one screen on a desktop: the chart and both category lists on the left, the
+       transaction panel beside them, filling the window's height and scrolling inside itself. *@
+    <div class="row g-3 dashboard-main">
+        <div class="col-lg-7 d-flex flex-column gap-3">
+            <div class="card">
+                @* ‹ and › (or a swipe) switch the chart between cash flow, net worth and an account's value; the choice is remembered. *@
+                <div class="card-body py-2 px-1 chart-switch" @ontouchstart="SwipeStart" @ontouchend="SwipeEndAsync">
+                    <button type="button" class="chart-switch-arrow" title="@($"Show {ChartName(OtherChart(-1))}")" aria-label="@($"Previous chart: {ChartName(OtherChart(-1))}")" @onclick="() => ShowChartAsync(OtherChart(-1))">‹</button>
+                    <div class="chart-switch-body">
+                        @if (_chart == Chart.NetWorth)
+                        {
+                            if (_netWorth is null)
+                            {
+                                <MonthLineChart Title="Net worth by month" Points="[]" Message="@(_netWorthError ?? "Loading…")" MessageIsError="_netWorthError is not null" />
+                            }
+                            else
+                            {
+                                <NetWorthChart Months="_netWorth" Selected="@(_month is { } m ? (m.Year, m.Month) : null)" OnSelect="SelectNetWorthMonthAsync" />
+                            }
+                        }
+                        else if (_chart == Chart.AccountValue)
+                        {
+                            <AccountValueChart Accounts="ValueAccounts" AccountId="@_valueAccount" AccountIdChanged="PickValueAccountAsync" Months="_accountValue" Error="@_accountValueError"
+                                               Selected="@(_month is { } m ? (m.Year, m.Month) : null)" OnSelect="SelectAccountValueMonthAsync" />
+                        }
+                        else
+                        {
+                            <IncomeExpenseChart Title="@(_lead == Lead.Category && _focus is not null && _category is { } c ? $"{ChoiceLabel(c)} by month" : "Income vs spending by month")"
+                                                Months="ChartSummary.Monthly" Selected="_month" OnSelect="SelectMonthAsync" />
+                        }
+                        <div class="chart-switch-dots" aria-hidden="true">
+                            @foreach (var chart in Charts)
+                            {
+                                <span class="@(chart == _chart ? "active" : "")"></span>
+                            }
+                        </div>
+                    </div>
+                    <button type="button" class="chart-switch-arrow" title="@($"Show {ChartName(OtherChart(1))}")" aria-label="@($"Next chart: {ChartName(OtherChart(1))}")" @onclick="() => ShowChartAsync(OtherChart(1))">›</button>
+                </div>
+            </div>
+
+            <div class="card flex-grow-1">
+                <div class="card-body d-flex flex-column">
+                    @{ var bars = BarsSummary; }
+                    @* One list at a time: the top-left toggles pick spending, income, assets or liabilities and
+                       the top-right how they're grouped; along the bottom, Bars/Pie and the list's total. The
+                       notes on what the figures mean are in the help article, not here. *@
+                    <div class="category-heading flex-wrap">
+                        <h2 class="visually-hidden">@BreakdownTitle</h2>
+                        <div class="btn-group btn-group-sm me-auto" role="group" aria-label="Show spending, income or assets">
+                            @foreach (var (view, label, title) in Breakdowns)
+                            {
+                                var on = _breakdown == view;
+                                <button type="button" class="btn btn-outline-secondary py-0 @(on ? "active" : "")" aria-pressed="@(on ? "true" : "false")" title="@title" @onclick="() => ShowBreakdownAsync(view)">@label</button>
+                            }
+                        </div>
+                        @{
+                            var (groupLabel, groupTitle, accountTitle) = _breakdown switch
+                            {
+                                Breakdown.Assets => ("By holding", "Each holding, added up across accounts, and real estate", "Each investment account's holdings, added up, and real estate"),
+                                Breakdown.Liabilities => ("By property", "What's owed on each property, and owed on no property", "Each loan, line of credit and card's balance"),
+                                _ => ("By category", "Each category, added up across accounts", "Each account's transactions, added up"),
+                            };
+                            <div class="btn-group btn-group-sm" role="group" aria-label="Group by">
+                                <button type="button" class="btn btn-outline-secondary py-0 @(_byAccount ? "" : "active")" aria-pressed="@(_byAccount ? "false" : "true")" title="@groupTitle" @onclick="() => ShowByAccountAsync(false)">@groupLabel</button>
+                                <button type="button" class="btn btn-outline-secondary py-0 @(_byAccount ? "active" : "")" aria-pressed="@(_byAccount ? "true" : "false")" title="@accountTitle" @onclick="() => ShowByAccountAsync(true)">By account</button>
+                            </div>
+                        }
+                    </div>
+                    @switch (_breakdown)
+                    {
+                        case Breakdown.Spending when _byAccount:
+                            <CategoryBars Items="ByAccount(bars.SpendingByAccount)" @bind-Expanded="_expanded" Pie="_pie" />
+                            break;
+                        case Breakdown.Income when _byAccount:
+                            <CategoryBars Items="ByAccount(bars.IncomeByAccount)" @bind-Expanded="_expanded" Pie="_pie" />
+                            break;
+                        case Breakdown.Spending:
+                            <CategoryBars Items="bars.SpendingByCategory" Details="bars.SpendingDetails" Kind="CategoryKind.Expense" Selected="_category" OnSelect="SelectCategoryAsync" @bind-Expanded="_expanded" Pie="_pie" />
+                            break;
+                        case Breakdown.Income:
+                            <CategoryBars Items="bars.IncomeByCategory" Details="bars.IncomeDetails" Kind="CategoryKind.Income" Flatten="@Categories.Income" Selected="_category" OnSelect="SelectCategoryAsync" @bind-Expanded="_expanded" Pie="_pie" />
+                            break;
+                        case Breakdown.Liabilities:
+                            if (_realEstateError is not null)
+                            {
+                                <div class="alert alert-danger py-2 mb-0">@_realEstateError</div>
+                            }
+                            else if (_realEstate is null)
+                            {
+                                <p class="text-body-secondary mb-0">Loading…</p>
+                            }
+                            else
+                            {
+                                if (ShownLiabilities.Count == 0)
+                                {
+                                    <p class="text-body-secondary mb-0">Nothing owed@(_accountIds.Count > 0 ? " in these accounts" : ""). <a href="accounts">Accounts →</a></p>
+                                }
+                                else if (_byAccount)
+                                {
+                                    <CategoryBars Items="LiabilityTotals" Unit="account(s)" @bind-Expanded="_expanded" Pie="_pie" />
+                                }
+                                else
+                                {
+                                    <CategoryBars Items="PropertyDebtTotals" Details="PropertyDebtDetails" Unit="account(s)" @bind-Expanded="_expanded" Pie="_pie" />
+                                }
+                            }
+                            break;
+                        default:
+                            if ((_holdingsError ?? _realEstateError) is { } assetsError)
+                            {
+                                <div class="alert alert-danger py-2 mb-0">@assetsError</div>
+                            }
+                            else if (_holdings is null || _realEstate is null)
+                            {
+                                <p class="text-body-secondary mb-0">Loading…</p>
+                            }
+                            else if (ShownHoldings.Count == 0 && RealEstateTotal is null)
+                            {
+                                <p class="text-body-secondary mb-0">
+                                    No holdings or real estate@(_accountIds.Count > 0 ? " in these accounts" : "") yet. <a href="holdings">Import an investment account's holdings</a>,
+                                    or add your home on <a href="accounts">Accounts</a>.
+                                </p>
+                            }
+                            else
+                            {
+                                @if (_byAccount)
+                                {
+                                    <CategoryBars Items="WithRealEstate(AccountTotals)" Details="[.. AccountHoldingTotals, .. PropertyValues]" Unit="holding(s)" Selected="@(_realEstatePick ?? _assetAccount)" OnSelect="SelectAssetAccount" @bind-Expanded="_expanded" Pie="_pie" />
+                                }
+                                else
+                                {
+                                    <CategoryBars Items="WithRealEstate(HoldingTotals)" Details="PropertyValues" Unit="account(s)" Selected="@(_realEstatePick ?? (_holding is null ? null : new CategoryChoice(_holding)))" OnSelect="SelectHolding" @bind-Expanded="_expanded" Pie="_pie" />
+                                }
+                            }
+                            break;
+                    }
+                    <div class="mt-auto pt-2 d-flex flex-wrap align-items-center justify-content-between gap-2">
+                        <div class="btn-group btn-group-sm" role="group" aria-label="Show as">
+                            <button type="button" class="btn btn-outline-secondary py-0 @(_pie ? "" : "active")" aria-pressed="@(_pie ? "false" : "true")" title="Show as bars" @onclick="() => ShowPieAsync(false)">Bars</button>
+                            <button type="button" class="btn btn-outline-secondary py-0 @(_pie ? "active" : "")" aria-pressed="@(_pie ? "true" : "false")" title="Show as a pie chart" @onclick="() => ShowPieAsync(true)">Pie</button>
+                        </div>
+                        @if (BreakdownTotal(bars) is { } total)
+                        {
+                            <span class="fw-semibold text-nowrap" title="@total.Title">@total.Text</span>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-5">
+            <div class="card h-100">
+                <div class="card-body d-flex flex-column">
+                    @if (PanelProperty() is { } picked)
+                    {
+                        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                            <h2 class="h6 card-title mb-0 me-auto">Property</h2>
+                            <button type="button" class="btn btn-sm btn-outline-secondary py-0" title="Refresh the dashboard" aria-label="Refresh the dashboard" @onclick="RefreshAsync">↻</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary py-0" title="Back to the transactions" @onclick="() => _realEstatePick = null">
+                                @picked.Property.Name <span aria-hidden="true">×</span><span class="visually-hidden">(clear)</span>
+                            </button>
+                        </div>
+                        <div class="dashboard-list">
+                            <div class="dashboard-list-scroll dashboard-holding">
+                                <dl class="row small mb-2">
+                                    @if (picked.Property.City is { } city)
+                                    {
+                                        <dt class="col-5">City or area</dt><dd class="col-7">@city</dd>
+                                    }
+                                    <dt class="col-5">Estimated value</dt>
+                                    <dd class="col-7">
+                                        @(picked.Value is { } value ? Money.Format(value.Value) : "Not entered")
+                                        @if (picked.Value is { } est)
+                                        {
+                                            <div class="text-body-secondary">@ValueNote(picked.Property, est)</div>
+                                        }
+                                    </dd>
+                                    <dt class="col-5">Owed</dt><dd class="col-7">@Money.Format(picked.Owed)</dd>
+                                    <dt class="col-5">Equity</dt><dd class="col-7 fw-semibold">@(picked.Equity is { } eq ? Money.Format(eq) : "—")</dd>
+                                    <dt class="col-5">Loan-to-value</dt><dd class="col-7">@(picked.LoanToValue is { } l ? Percent(l) : "—")</dd>
+                                </dl>
+                                <h3 class="h6">Loans secured by it</h3>
+                                @if (picked.Loans.Count == 0)
+                                {
+                                    <p class="small text-body-secondary">None linked. Link its mortgage on the <a href="accounts">Accounts</a> page.</p>
+                                }
+                                else
+                                {
+                                    <table class="table table-sm mb-2">
+                                        <tbody>
+                                            @foreach (var (loan, owed) in picked.Loans)
+                                            {
+                                                <tr>
+                                                    <td>@loan.DisplayName <div class="small text-body-secondary">@AccountKind.LabelFor(loan)@(loan.BalanceAsOf is { } asOf ? $" · as of {Display.Date(DateOnly.FromDateTime(asOf.Date))}" : "")</div></td>
+                                                    <td class="text-end text-nowrap">@Money.Format(owed)</td>
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                }
+                                <a class="small" href="accounts">Change on the Accounts page →</a>
+                            </div>
+                        </div>
+                    }
+                    else if (HoldingPlaces() is { Count: > 0 } places)
+                    {
+                        @* A holding picked from Assets: the panel shows where it's held instead of transactions. *@
+                        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                            <h2 class="h6 card-title mb-0 me-auto">Holding</h2>
+                            <button type="button" class="btn btn-sm btn-outline-secondary py-0" title="Refresh the dashboard" aria-label="Refresh the dashboard" @onclick="RefreshAsync">↻</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary py-0" title="@(_byAccount ? "Back to the account's holdings" : "Back to the transactions")" @onclick="ClearPanelHolding">
+                                @PanelHolding <span aria-hidden="true">×</span><span class="visually-hidden">(clear)</span>
+                            </button>
+                        </div>
+                        <div class="dashboard-list">
+                            <div class="dashboard-list-scroll dashboard-holding">
+                                <HoldingDetails Label="@(PanelHolding!)" Places="places" />
+                            </div>
+                        </div>
+                    }
+                    else if (PanelAccount() is var (snapshot, accountLabel))
+                    {
+                        @* An account picked from Assets, by account: the panel lists its holdings. *@
+                        <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                            <h2 class="h6 card-title mb-0 me-auto">Holdings</h2>
+                            <button type="button" class="btn btn-sm btn-outline-secondary py-0" title="Refresh the dashboard" aria-label="Refresh the dashboard" @onclick="RefreshAsync">↻</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary py-0" title="Back to the transactions" @onclick="() => SelectAssetAccount(null)">
+                                @accountLabel <span aria-hidden="true">×</span><span class="visually-hidden">(clear)</span>
+                            </button>
+                        </div>
+                        <div class="dashboard-list">
+                            <div class="dashboard-list-scroll dashboard-holding">
+                                <AccountHoldings AccountId="@snapshot.AccountId" Name="@accountLabel" Institution="@AccountOf(snapshot.AccountId)?.InstitutionName"
+                                                 AsOf="snapshot.AsOf" Holdings="snapshot.Holdings" OnSelect="label => SelectAccountHolding(accountLabel, label)" />
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                        <h2 class="h6 card-title mb-0 me-auto">@(IsFiltered ? "Transactions" : "Recent transactions")</h2>
+                        @* Re-categorizing keeps rows in place; this reloads them, dropping the ones that moved out. *@
+                        <button type="button" class="btn btn-sm btn-outline-secondary py-0" title="Refresh the dashboard" aria-label="Refresh the dashboard"
+                                disabled="@(_list is null && _listError is null)" @onclick="RefreshAsync">↻</button>
+                        @if (_month is { } month)
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-secondary py-0" title="Show all months" @onclick="() => SelectMonthAsync(null)">
+                                @Display.Month(month.Year, month.Month) <span aria-hidden="true">×</span><span class="visually-hidden">(clear)</span>
+                            </button>
+                        }
+                        @if (_category is { } category)
+                        {
+                            <button type="button" class="btn btn-sm btn-outline-secondary py-0" title="Show all categories" @onclick="() => SelectCategoryAsync(null)">
+                                @ChoiceLabel(category) <span aria-hidden="true">×</span><span class="visually-hidden">(clear)</span>
+                            </button>
+                        }
+                    </div>
+                    @if (!IsFiltered)
+                    {
+                        <p class="small text-body-secondary mb-2">@PanelHint</p>
+                    }
+
+                    @if (_listError is not null)
+                    {
+                        <div class="alert alert-danger py-2 mb-0">@_listError</div>
+                    }
+                    else if (_list is null)
+                    {
+                        <p class="text-body-secondary mb-0">Loading…</p>
+                    }
+                    else if (_list.Count == 0)
+                    {
+                        <p class="text-body-secondary mb-0">
+                            @if (IsFiltered)
+                            {
+                                @:No transactions match.
+                            }
+                            else
+                            {
+                                @:No transactions in this period. <a href="import">Import some.</a>
+                            }
+                        </p>
+                    }
+                    else
+                    {
+                        <div class="dashboard-list">
+                        @* Shows only the rows that fit (js/fitrows.js), so the panel never scrolls. *@
+                        <div class="dashboard-list-scroll" @ref="_listBox">
+                        <table class="table table-sm align-middle mb-0">
+                            <tbody>
+                                @foreach (var item in _list)
+                                {
+                                    <tr @key="(item.Transaction.AccountId, item.Transaction.TransactionId)">
+                                        <td class="text-nowrap text-body-secondary">@Display.ShortDate(item.Transaction.EffectiveDate)</td>
+                                        <td class="recent-description">
+                                            <div class="text-truncate" title="@AccountName(item.Transaction.AccountId)">@item.Transaction.Description</div>
+                                            @* The category picker with the tags beside it, so a row stays two lines high. *@
+                                            <div class="recent-line">
+                                                <TransactionClassifier Item="item" Changed="ClassificationChangedAsync" CategoryOnly="true" Currency="@_accounts.CurrencyOf(item.Transaction.AccountId)" />
+                                                <TransactionTags Item="item" Changed="ClassificationChangedAsync" Compact="true" />
+                                            </div>
+                                        </td>
+                                        <td class="text-end text-nowrap"><AmountText Transaction="item.Transaction" Currency="@_accounts.CurrencyOf(item.Transaction.AccountId)" /></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                        </div>
+                        </div>
+                        <a class="mt-2 align-self-start" href="@FullListLink()">See full list →</a>
+                    }
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+</div>
+
+@code {
+    /// <summary>
+    /// How many transactions the side panel loads, filtered or not. It shows as many as fit its
+    /// height (or the first <see cref="StackedListSize"/> in the narrow, stacked layout).
+    /// </summary>
+    private const int ListSize = MapleLedger.Data.LedgerService.RecentTransactionCount;
+    private const int StackedListSize = 10;
+
+    private ElementReference _listBox;
+    private string? _fittedBox;
+    private IJSObjectReference? _fitModule, _fitter;
+
+    private IReadOnlyList<Period> _periods = Periods.All(Periods.Today);
+    private Period _period = default!;
+    private DashboardSummary? _summary;
+    private IReadOnlyList<Account>? _accounts;
+    private string? _error;
+    private int _loadVersion;
+
+    // The accounts the whole dashboard covers; empty for all of them. Remembered in this browser.
+    private IReadOnlyList<string> _accountIds = [];
+    private const string AccountsPreference = "dashboard.accounts";
+
+    // The side panel: the period's newest transactions, narrowed by a clicked month and/or category.
+    private MonthlyCashFlow? _month;
+    private CategoryChoice? _category;
+
+    // The one category (spending or income) showing its details.
+    private string? _expanded;
+
+    // The category lists as pies rather than bars. Remembered in this browser.
+    private bool _pie;
+    private const string PiePreference = "dashboard.categoryPie";
+
+    private async Task ShowPieAsync(bool pie)
+    {
+        _pie = pie;
+        await Preferences.SetAsync(PiePreference, pie);
+    }
+
+    // Which list the category card shows. Remembered in this browser.
+    private enum Breakdown { Spending, Income, Assets, Liabilities }
+    private Breakdown _breakdown;
+    private const string BreakdownPreference = "dashboard.breakdown";
+
+    private static readonly (Breakdown View, string Label, string Title)[] Breakdowns =
+    [
+        (Breakdown.Spending, "Spending", "Spending"),
+        (Breakdown.Income, "Income", "Income"),
+        (Breakdown.Assets, "Assets", "Investment holdings by market value, and real estate"),
+        (Breakdown.Liabilities, "Liabilities", "What's owed on loans, lines of credit and cards"),
+    ];
+
+    private async Task ShowBreakdownAsync(Breakdown view)
+    {
+        _breakdown = view;
+        (_holding, _assetAccount, _realEstatePick) = (null, null, null);
+        await Preferences.SetAsync(BreakdownPreference, view.ToString());
+        await Task.WhenAll(
+            view == Breakdown.Assets && _holdings is null ? LoadHoldingsAsync() : Task.CompletedTask,
+            view is Breakdown.Assets or Breakdown.Liabilities && _realEstate is null ? LoadRealEstateAsync() : Task.CompletedTask);
+    }
+
+    private string BreakdownTitle => Breakdowns.Single(b => b.View == _breakdown).Title
+        + (_breakdown, _byAccount) switch
+        {
+            (Breakdown.Assets, true) => ", by account",
+            (Breakdown.Assets, false) => ", by holding",
+            (Breakdown.Liabilities, true) => ", by account",
+            (Breakdown.Liabilities, false) => ", by property",
+            (_, true) => " by account" + BarsPeriod,
+            _ => " by category" + BarsPeriod,
+        };
+
+    /// <summary>Beside the toggles: the list's total, and the month it's narrowed to or the holdings' date.</summary>
+    private sealed record BreakdownAmount(string Text, string Title);
+
+    /// <summary>
+    /// The card's bottom-right corner: the list's total. Assets and liabilities are in Canadian dollars;
+    /// spending and income are added up as recorded, with the month they're narrowed to.
+    /// </summary>
+    private BreakdownAmount? BreakdownTotal(DashboardSummary bars)
+    {
+        switch (_breakdown)
+        {
+            case Breakdown.Liabilities:
+                if (_realEstate is null || ShownLiabilities.Count == 0) return null;
+                return new($"{Money.FormatWhole(ShownLiabilities.Sum(l => l.Owed))} CAD", "Total owed, in Canadian dollars, as last set on each account");
+            case Breakdown.Assets:
+                if (_holdings is null || _realEstate is null) return null;
+                var shown = ShownHoldings;
+                var total = shown.Sum(s => s.MarketValueCad) + (RealEstateTotal?.Amount ?? 0);
+                if (shown.Count == 0 && total == 0) return null;
+                var asOf = shown.Count == 0 ? "" : $" Holdings as of {AsOf(shown.Min(s => s.AsOf), shown.Max(s => s.AsOf))}.";
+                return new($"{Money.FormatWhole(total)} CAD", "Market value in Canadian dollars, with real estate at its entered value." + asOf);
+            default:
+                var spending = _breakdown == Breakdown.Spending;
+                var amount = spending ? bars.Expenses : bars.Income;
+                return amount == 0 ? null : new(Money.FormatWhole(amount) + BarsPeriod, spending ? "Total spending" : "Total income");
+        }
+
+        static string AsOf(DateOnly first, DateOnly last) => first == last ? Display.Date(last) : $"{Display.Date(first)} – {Display.Date(last)}";
+    }
+
+    // Which chart the top card shows. Remembered in this browser.
+    private enum Chart { CashFlow, NetWorth, AccountValue }
+    private static readonly Chart[] Charts = [Chart.CashFlow, Chart.NetWorth, Chart.AccountValue];
+    private Chart _chart;
+    private const string ChartPreference = "dashboard.chart";
+
+    private static string ChartName(Chart chart) => chart switch
+    {
+        Chart.NetWorth => "net worth by month",
+        Chart.AccountValue => "account value by month",
+        _ => "income vs spending by month",
+    };
+
+    /// <summary>The chart before (-1) or after (1) the one shown, wrapping around.</summary>
+    private Chart OtherChart(int step) => Charts[(Array.IndexOf(Charts, _chart) + step + Charts.Length) % Charts.Length];
+
+    private async Task ShowChartAsync(Chart chart)
+    {
+        _chart = chart;
+        await Preferences.SetAsync(ChartPreference, chart.ToString());
+        if (chart == Chart.NetWorth && _netWorth is null && _netWorthError is null) await LoadNetWorthAsync();
+        if (chart == Chart.AccountValue && _accountValue is null && _accountValueError is null) await LoadAccountValueAsync();
+    }
+
+    // A sideways swipe across the chart switches it, like the arrows.
+    private double? _swipeX;
+
+    private void SwipeStart(TouchEventArgs e) => _swipeX = e.ChangedTouches.FirstOrDefault()?.ClientX;
+
+    private Task SwipeEndAsync(TouchEventArgs e)
+    {
+        var start = _swipeX;
+        _swipeX = null;
+        if (start is not { } x || e.ChangedTouches.FirstOrDefault() is not { } touch) return Task.CompletedTask;
+        var moved = touch.ClientX - x;
+        return Math.Abs(moved) < 50 ? Task.CompletedTask : ShowChartAsync(OtherChart(moved < 0 ? 1 : -1));
+    }
+
+    // Net worth at each month's end over the period, loaded when its chart is shown. Like the Net worth
+    // tile it follows the accounts picked, not the tags.
+    private IReadOnlyList<MonthlyNetWorth>? _netWorth;
+    private string? _netWorthError;
+    private int _netWorthVersion;
+
+    private async Task LoadNetWorthAsync()
+    {
+        var version = ++_netWorthVersion;
+        _netWorthError = null;
+        try
+        {
+            // Up to today: later months haven't happened yet.
+            var to = _period.To < Periods.Today ? _period.To : Periods.Today;
+            var months = to < _period.From ? [] : await Store.GetNetWorthByMonthAsync(_period.From, to, _accountIds);
+            if (version == _netWorthVersion) _netWorth = months;
+            if (months.Count == 0 || !PriceHistory.Enabled) return;
+            StateHasChanged(); // shown now, by the prices already saved
+
+            // Then the holdings' month-end prices for the months shown, and work it out again if any came in.
+            if ((await PriceHistory.RefreshAsync(_period.From, to)).Changed && version == _netWorthVersion)
+            {
+                months = await Store.GetNetWorthByMonthAsync(_period.From, to, _accountIds);
+                if (version == _netWorthVersion)
+                {
+                    _netWorth = months;
+                    StateHasChanged();
+                }
+            }
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            if (version == _netWorthVersion && _netWorth is null) _netWorthError = $"Couldn't work out net worth by month: {ex.Message}";
+        }
+    }
+
+    /// <summary>A month clicked on the net worth chart picks the same month as the cash flow chart's.</summary>
+    private Task SelectNetWorthMonthAsync(MonthlyNetWorth? month) =>
+        SelectMonthAsync(month is null ? null : _summary?.Monthly.FirstOrDefault(m => m.Year == month.Year && m.Month == month.Month));
+
+    // One account's value at each month's end over the period, loaded when its chart is shown. The
+    // account is picked beside the chart's title from the accounts in view, and remembered in this browser.
+    private string? _valueAccount;
+    private const string ValueAccountPreference = "dashboard.valueAccount";
+    private IReadOnlyList<MonthlyAccountValue>? _accountValue;
+    private string? _accountValueError;
+    private int _accountValueVersion;
+
+    /// <summary>The accounts the chart can show: those the dashboard covers, open ones first.</summary>
+    private IReadOnlyList<(Account Account, string Label)> ValueAccounts
+    {
+        get
+        {
+            var shown = (_accounts ?? []).Where(a => _accountIds.Count == 0 || _accountIds.Contains(a.AccountId))
+                .OrderBy(a => a.Status == AccountStatus.Closed).ToList();
+            var labels = AccountLabels(shown.Select(a => a.AccountId).ToList());
+            return shown.Select((a, i) => (a, labels[i])).ToList();
+        }
+    }
+
+    private async Task PickValueAccountAsync(string accountId)
+    {
+        _valueAccount = accountId;
+        await Preferences.SetAsync(ValueAccountPreference, accountId);
+        await LoadAccountValueAsync();
+    }
+
+    private async Task LoadAccountValueAsync()
+    {
+        var version = ++_accountValueVersion;
+        (_accountValue, _accountValueError) = (null, null);
+        // The remembered account, or the first in view when it's gone from view.
+        var accounts = ValueAccounts;
+        if (accounts.All(a => a.Account.AccountId != _valueAccount)) _valueAccount = accounts.Count == 0 ? null : accounts[0].Account.AccountId;
+        if (_valueAccount is not { } accountId) return;
+        try
+        {
+            var to = _period.To < Periods.Today ? _period.To : Periods.Today;
+            var months = to < _period.From ? [] : await Store.GetAccountValueByMonthAsync(accountId, _period.From, to);
+            if (version == _accountValueVersion) _accountValue = months;
+            if (months.Count == 0 || !PriceHistory.Enabled || AccountOf(accountId) is not { IsLiability: false }) return;
+            StateHasChanged(); // shown now, by the prices already saved
+
+            // Then the holdings' month-end prices for the months shown, and work it out again if any came in.
+            if ((await PriceHistory.RefreshAsync(_period.From, to)).Changed && version == _accountValueVersion)
+            {
+                months = await Store.GetAccountValueByMonthAsync(accountId, _period.From, to);
+                if (version == _accountValueVersion)
+                {
+                    _accountValue = months;
+                    StateHasChanged();
+                }
+            }
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            if (version == _accountValueVersion && _accountValue is null) _accountValueError = $"Couldn't work out the account's value by month: {ex.Message}";
+        }
+    }
+
+    /// <summary>A month clicked on the account's chart picks the same month as the cash flow chart's.</summary>
+    private Task SelectAccountValueMonthAsync(MonthlyAccountValue? month) =>
+        SelectMonthAsync(month is null ? null : _summary?.Monthly.FirstOrDefault(m => m.Year == month.Year && m.Month == month.Month));
+
+    // The investment accounts' latest holdings, loaded when the Assets list is first shown. They
+    // follow the account filter but not the period or tags: they're a snapshot, like net worth.
+    private IReadOnlyList<HoldingsSnapshot>? _holdings;
+
+    /// <summary>The last refresh of the holdings' prices, for the notice under the totals.</summary>
+    private QuoteRefresh? _prices;
+    private string? _holdingsError;
+    private int _holdingsVersion;
+
+    private async Task LoadHoldingsAsync()
+    {
+        var version = ++_holdingsVersion;
+        _holdingsError = null;
+        try
+        {
+            var holdings = await Store.GetHoldingsAsync();
+            if (version == _holdingsVersion) _holdings = holdings;
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            if (version == _holdingsVersion) _holdingsError = $"Couldn't load the holdings: {ex.Message}";
+        }
+    }
+
+    private IReadOnlyList<HoldingsSnapshot> ShownHoldings =>
+        (_holdings ?? []).Where(s => s.Holdings.Count > 0 && (_accountIds.Count == 0 || _accountIds.Contains(s.AccountId))).ToList();
+
+    /// <summary>
+    /// Each holding's market value in Canadian dollars, the same symbol (or description) in several
+    /// accounts added together; the count is how many accounts hold it.
+    /// </summary>
+    private IReadOnlyList<CategoryTotal> HoldingTotals => ShownHoldings
+        .SelectMany(s => s.Holdings.Select(h => (s.AccountId, Holding: h)))
+        .GroupBy(x => HoldingKey(x.Holding.Label))
+        .Select(g => new CategoryTotal(g.First().Holding.Label.Trim(), g.Sum(x => x.Holding.MarketValueCad), g.Select(x => x.AccountId).Distinct().Count()))
+        .OrderByDescending(t => t.Amount)
+        .ToList();
+
+    /// <summary>Each investment account's holdings added up, in Canadian dollars; the count is how many holdings it has.</summary>
+    private IReadOnlyList<CategoryTotal> AccountTotals => AssetAccounts
+        .Select(a => new CategoryTotal(a.Label, a.Snapshot.MarketValueCad, a.Snapshot.Holdings.Count))
+        .ToList();
+
+    /// <summary>Each account's holdings (the same one twice in an account added together), as the account's details.</summary>
+    private IReadOnlyList<CategoryTotal> AccountHoldingTotals => AssetAccounts
+        .SelectMany(a => a.Snapshot.Holdings
+            .GroupBy(h => HoldingKey(h.Label))
+            .Select(g => new CategoryTotal(a.Label, g.Sum(h => h.MarketValueCad), g.Count(), g.First().Label.Trim()))
+            .OrderByDescending(t => t.Amount))
+        .ToList();
+
+    /// <summary>The investment accounts shown, largest first, with the names they go by in the list.</summary>
+    private IReadOnlyList<(HoldingsSnapshot Snapshot, string Label)> AssetAccounts
+    {
+        get
+        {
+            var shown = ShownHoldings.OrderByDescending(s => s.MarketValueCad).ToList();
+            var labels = AccountLabels(shown.Select(s => s.AccountId).ToList());
+            return shown.Select((s, i) => (s, labels[i])).ToList();
+        }
+    }
+
+    /// <summary>
+    /// Per-account totals (keyed by account id) with the accounts' names in their place; accounts
+    /// sharing a name get their number's last digits, or a count, so each keeps its own row.
+    /// </summary>
+    private IReadOnlyList<CategoryTotal> ByAccount(IReadOnlyList<CategoryTotal>? totals)
+    {
+        if (totals is null) return [];
+        var labels = AccountLabels(totals.Select(t => t.Category).ToList());
+        return totals.Select((t, i) => t with { Category = labels[i] }).ToList();
+    }
+
+    /// <summary>The accounts' names, in order; accounts sharing a name get their number's last digits, or a count.</summary>
+    private List<string> AccountLabels(IReadOnlyList<string> accountIds)
+    {
+        var names = accountIds.Select(id => AccountName(id) is { Length: > 0 } name ? name : "Unknown account").ToList();
+        var used = new HashSet<string>();
+        return accountIds.Select((id, i) =>
+        {
+            var name = names[i];
+            if (names.Count(n => n == name) > 1 && Last4(id) is { } last4) name = $"{name} ··{last4}";
+            for (var n = 2; !used.Add(name); n++) name = $"{names[i]} ({n})";
+            return name;
+        }).ToList();
+
+        string? Last4(string accountId) => _accounts?.FirstOrDefault(a => a.AccountId == accountId)?.AccountNumberDisplay is { Length: > 0 } masked ? masked[^Math.Min(4, masked.Length)..] : null;
+    }
+
+    // Liabilities and Real estate: the properties, their index readings and the exchange rates,
+    // loaded when either list is first shown. Like net worth, they're balances, not the period's.
+    private sealed record RealEstateData(IReadOnlyList<RealEstateProperty> Properties, IReadOnlyList<HpiReading> Readings, CurrencyRates Rates);
+    private RealEstateData? _realEstate;
+    private string? _realEstateError;
+    private int _realEstateVersion;
+
+    private async Task LoadRealEstateAsync()
+    {
+        var version = ++_realEstateVersion;
+        _realEstateError = null;
+        try
+        {
+            var properties = Store.GetPropertiesAsync();
+            var readings = Store.GetHpiReadingsAsync();
+            var rates = Store.GetExchangeRatesAsync();
+            var data = new RealEstateData(await properties, await readings, new CurrencyRates(await rates));
+            if (version == _realEstateVersion) _realEstate = data;
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            if (version == _realEstateVersion) _realEstateError = $"Couldn't load the properties: {ex.Message}";
+        }
+    }
+
+    /// <summary>The open loans, lines of credit and cards in view, with what each owes in Canadian dollars.</summary>
+    private IReadOnlyList<(Account Account, decimal Owed)> ShownLiabilities => (_accounts ?? [])
+        .Where(a => a.IsLiability && a.Status != AccountStatus.Closed && (_accountIds.Count == 0 || _accountIds.Contains(a.AccountId)))
+        .Select(a => (a, (_realEstate?.Rates ?? CurrencyRates.None).BalanceInCad(a)))
+        .Where(x => x.Item2 != 0)
+        .ToList();
+
+    /// <summary>Each liability's balance, largest first, by account name (bars can't show a credit, so those are left out).</summary>
+    private IReadOnlyList<CategoryTotal> LiabilityTotals
+    {
+        get
+        {
+            var owing = ShownLiabilities.Where(l => l.Owed > 0).OrderByDescending(l => l.Owed).ToList();
+            var labels = AccountLabels(owing.Select(l => l.Account.AccountId).ToList());
+            return owing.Select((l, i) => new CategoryTotal(labels[i], l.Owed, 1)).ToList();
+        }
+    }
+
+    private const string NoProperty = "Not secured by a property";
+
+    /// <summary>The property each liability is secured by, or <see cref="NoProperty"/>, with the account's name as it's listed.</summary>
+    private IReadOnlyList<(string Group, string Label, decimal Owed)> GroupedLiabilities
+    {
+        get
+        {
+            var owing = ShownLiabilities.Where(l => l.Owed > 0).ToList();
+            var labels = AccountLabels(owing.Select(l => l.Account.AccountId).ToList());
+            var properties = _realEstate?.Properties ?? [];
+            return owing.Select((l, i) => (properties.FirstOrDefault(p => p.AccountIds.Contains(l.Account.AccountId))?.Name ?? NoProperty, labels[i], l.Owed)).ToList();
+        }
+    }
+
+    private IReadOnlyList<CategoryTotal> PropertyDebtTotals => GroupedLiabilities
+        .GroupBy(l => l.Group)
+        .Select(g => new CategoryTotal(g.Key, g.Sum(l => l.Owed), g.Count()))
+        .OrderBy(t => t.Category == NoProperty)
+        .ThenByDescending(t => t.Amount)
+        .ToList();
+
+    private IReadOnlyList<CategoryTotal> PropertyDebtDetails => GroupedLiabilities
+        .OrderByDescending(l => l.Owed)
+        .Select(l => new CategoryTotal(l.Group, l.Owed, 1, l.Label))
+        .ToList();
+
+    /// <summary>The properties in view: with an account filter, the ones secured by one of those accounts.</summary>
+    private IReadOnlyList<PropertyEquity> ShownEquities => _realEstate is not { } data ? []
+        : PropertyValuation.Equities(
+            data.Properties.Where(p => _accountIds.Count == 0 || p.AccountIds.Any(_accountIds.Contains)),
+            data.Readings, _accounts ?? [], data.Rates);
+
+    /// <summary>Under Assets, the properties are one more row, with each property as its details.</summary>
+    private const string RealEstateRow = "Real estate";
+
+    // Assets: Real estate picked (Category), and the property under it (SubCategory) whose details the panel shows.
+    private CategoryChoice? _realEstatePick;
+
+    /// <summary>The properties with a value, each named as its row (its name, or with its city when two share one).</summary>
+    private IReadOnlyList<(PropertyEquity Equity, string Label)> ValuedProperties
+    {
+        get
+        {
+            var valued = ShownEquities.Where(e => e.Value is { Value: > 0 }).OrderByDescending(e => e.Value!.Value).ToList();
+            return valued.Select(e => (e, valued.Count(o => o.Property.Name == e.Property.Name) > 1 && e.Property.City is { } city ? $"{e.Property.Name} ({city})" : e.Property.Name)).ToList();
+        }
+    }
+
+    /// <summary>All the properties' estimated values as one Assets row; null without any.</summary>
+    private CategoryTotal? RealEstateTotal => ValuedProperties is { Count: > 0 } valued
+        ? new CategoryTotal(RealEstateRow, valued.Sum(v => v.Equity.Value!.Value), valued.Count)
+        : null;
+
+    private IReadOnlyList<CategoryTotal> PropertyValues => ValuedProperties
+        .Select(v => new CategoryTotal(RealEstateRow, v.Equity.Value!.Value, 1, v.Label))
+        .ToList();
+
+    private IReadOnlyList<CategoryTotal> WithRealEstate(IReadOnlyList<CategoryTotal> totals) =>
+        RealEstateTotal is { } row ? [.. totals.Append(row).OrderByDescending(t => t.Amount)] : totals;
+
+    /// <summary>Real estate, or a property under it, picked in the Assets list; true when it was (the caller does nothing else).</summary>
+    private bool PickRealEstate(CategoryChoice? choice)
+    {
+        if (choice?.Category != RealEstateRow)
+        {
+            _realEstatePick = null;
+            return false;
+        }
+
+        (_holding, _assetAccount, _realEstatePick) = (null, null, choice);
+        return true;
+    }
+
+    private PropertyEquity? PanelProperty() =>
+        _breakdown == Breakdown.Assets && _realEstatePick is { SubCategory: { } label }
+            ? ValuedProperties.Where(v => v.Label == label).Select(v => v.Equity).FirstOrDefault()
+            : null;
+
+    private string PanelHint => _breakdown switch
+    {
+        Breakdown.Assets when _byAccount => "Click a month to see its transactions here, an account to see its holdings, or a property under Real estate to see its value and loans.",
+        Breakdown.Assets => "Click a month to see its transactions here, a holding to see where it's held, or a property under Real estate to see its value and loans.",
+        Breakdown.Liabilities => "Click a month to see its transactions here.",
+        _ => "Click a month or a category to see its transactions here.",
+    };
+
+    private static string ValueNote(RealEstateProperty p, PropertyEstimate e) =>
+        e is { ByIndex: true, IndexChange: { } change }
+            ? $"{Money.FormatWhole(p.Value!.Value)} in {Display.Month(e.From!.Month.Year, e.From.Month.Month)}; the {p.City} house price index is {(change >= 0 ? "up" : "down")} {Percent(Math.Abs(change))} to {Display.Month(e.To!.Month.Year, e.To.Month.Month)}"
+            : $"As entered, {Display.Date(e.AsOf)}";
+
+    private static string Percent(decimal share) => share.ToString("0.0%", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string NetWorthDetail(NetWorthSummary n) => n.RealEstate > 0
+        ? $"{Money.FormatWhole(n.Assets)} assets · {Money.FormatWhole(n.RealEstate)} real estate · {Money.FormatWhole(n.Liabilities)} owed"
+        : $"{Money.FormatWhole(n.Assets)} assets · {Money.FormatWhole(n.Liabilities)} owed";
+
+    // Assets, by holding: the holding (as the list names it) whose accounts the panel shows instead of transactions.
+    private string? _holding;
+
+    // Assets, by account: the account picked (Category, as the list names it), whose holdings the panel
+    // shows, and the one of its holdings picked under it (SubCategory), which the panel shows instead.
+    private CategoryChoice? _assetAccount;
+
+    private void SelectHolding(CategoryChoice? choice)
+    {
+        if (!PickRealEstate(choice)) _holding = choice?.Category;
+    }
+
+    private void SelectAssetAccount(CategoryChoice? choice)
+    {
+        if (!PickRealEstate(choice)) _assetAccount = choice;
+    }
+
+    /// <summary>A holding clicked in the account's list: picks it under the account, as its row does.</summary>
+    private void SelectAccountHolding(string account, string label) =>
+        _assetAccount = new CategoryChoice(account, AccountHoldingTotals.FirstOrDefault(t => t.Category == account && HoldingKey(t.SubCategory!) == HoldingKey(label))?.SubCategory ?? label.Trim());
+
+    private void ClearPanelHolding()
+    {
+        if (_byAccount) _assetAccount = _assetAccount is null ? null : new CategoryChoice(_assetAccount.Category);
+        else _holding = null;
+    }
+
+    /// <summary>The holding the panel shows, if any.</summary>
+    private string? PanelHolding => _breakdown != Breakdown.Assets ? null : _byAccount ? _assetAccount?.SubCategory : _holding;
+
+    /// <summary>The account the panel lists the holdings of, if one's picked (and no holding under it).</summary>
+    private (HoldingsSnapshot Snapshot, string Label)? PanelAccount() =>
+        _breakdown == Breakdown.Assets && _byAccount && _assetAccount is { SubCategory: null } pick
+            ? AssetAccounts.Where(a => a.Label == pick.Category).Select(a => ((HoldingsSnapshot, string)?)a).FirstOrDefault()
+            : null;
+
+    private Account? AccountOf(string accountId) => _accounts?.FirstOrDefault(a => a.AccountId == accountId);
+
+    /// <summary>Each account position in the panel's holding, or empty when none is picked (or it's gone from view).</summary>
+    private IReadOnlyList<HoldingDetails.Place> HoldingPlaces()
+    {
+        if (PanelHolding is not { } holding) return [];
+        var key = HoldingKey(holding);
+        var shown = ShownHoldings;
+        var labels = AccountLabels(shown.Select(s => s.AccountId).ToList());
+        return shown
+            .SelectMany((s, i) => s.Holdings.Where(h => HoldingKey(h.Label) == key)
+                .Select(h => new HoldingDetails.Place(s.AccountId, labels[i], _accounts?.FirstOrDefault(a => a.AccountId == s.AccountId)?.InstitutionName, s.AsOf, h, s.MarketValueCad)))
+            .ToList();
+    }
+
+    /// <summary>Holdings with the same symbol (or description) are one holding, whatever the case or spacing at the ends.</summary>
+    private static string HoldingKey(string label) => label.Trim().ToUpperInvariant();
+
+    // Whether the card lists accounts rather than categories or holdings. Remembered in this browser.
+    private bool _byAccount;
+    private const string ByAccountPreference = "dashboard.byAccount";
+
+    private async Task ShowByAccountAsync(bool byAccount)
+    {
+        _byAccount = byAccount;
+        (_holding, _assetAccount, _realEstatePick) = (null, null, null);
+        await Preferences.SetAsync(ByAccountPreference, byAccount);
+    }
+
+    // Whichever of month and category was picked first leads: it narrows the other view (a month
+    // narrows the category bars; a category re-plots the chart for itself), while the second pick
+    // only narrows the transaction panel. _focus holds the leading pick's own totals.
+    private enum Lead { None, Month, Category }
+    private Lead _lead;
+    private DashboardSummary? _focus;
+    private string? _focusKey;
+    private int _focusVersion;
+
+    private DashboardSummary ChartSummary => _lead == Lead.Category ? _focus ?? _summary! : _summary!;
+    private DashboardSummary BarsSummary => _lead == Lead.Month ? _focus ?? _summary! : _summary!;
+    private IReadOnlyList<LedgerTransaction>? _list;
+    private string? _listError;
+    private int _listVersion;
+
+    private bool IsFiltered => _month is not null || _category is not null;
+
+    /// <summary>Whether the panel's list (and so <see cref="_listBox"/>) is on the page.</summary>
+    private bool ListShown => _error is null && _summary is not null && _accounts is { Count: > 0 } && _listError is null && _list is { Count: > 0 } && HoldingPlaces().Count == 0 && PanelAccount() is null && PanelProperty() is null;
+
+    // Starts fitting the panel's rows whenever its list box appears (it's re-created when the list
+    // reloads through "Loading…"), and stops when it goes.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var box = ListShown ? _listBox.Id : null;
+        if (box == _fittedBox) return;
+        _fittedBox = box;
+        await StopFittingAsync();
+        if (box is null) return;
+
+        try
+        {
+            _fitModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/fitrows.js");
+            _fitter = await _fitModule.InvokeAsync<IJSObjectReference>("fit", _listBox, StackedListSize);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    private async Task StopFittingAsync()
+    {
+        if (_fitter is null) return;
+        try
+        {
+            await _fitter.InvokeVoidAsync("dispose");
+            await _fitter.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+
+        _fitter = null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await StopFittingAsync();
+        if (_fitModule is null) return;
+        try
+        {
+            await _fitModule.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    // Transactions with any of these tags; empty for all. Not remembered: a dashboard that opens
+    // showing only "Rental" would look like the whole picture.
+    private IReadOnlyList<string> _tagIds = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _period = _periods.Single(p => p.Key == "12m");
+        _accountIds = await Preferences.GetAsync<List<string>>(AccountsPreference) ?? [];
+        _pie = await Preferences.GetAsync<bool>(PiePreference);
+        _valueAccount = await Preferences.GetAsync<string>(ValueAccountPreference);
+        // Until Spending and Income could list accounts too, the choice was Assets' alone.
+        _byAccount = await Preferences.GetAsync<bool?>(ByAccountPreference) ?? await Preferences.GetAsync<bool>("dashboard.assetsByAccount");
+        // Real estate had a view of its own before it became part of Assets.
+        _chart = Enum.TryParse<Chart>(await Preferences.GetAsync<string>(ChartPreference), out var chart) ? chart : Chart.CashFlow;
+        var saved = await Preferences.GetAsync<string>(BreakdownPreference);
+        _breakdown = saved == "RealEstate" ? Breakdown.Assets : Enum.TryParse<Breakdown>(saved, out var breakdown) ? breakdown : Breakdown.Spending;
+        await (_breakdown switch
+        {
+            Breakdown.Assets => Task.WhenAll(LoadAsync(), LoadHoldingsAsync(), LoadRealEstateAsync()),
+            Breakdown.Liabilities => Task.WhenAll(LoadAsync(), LoadRealEstateAsync()),
+            _ => LoadAsync(),
+        });
+
+        // Then the house price index for the properties' areas, and reload if it moved their values.
+        try
+        {
+            if (Hpi.Enabled && (await Hpi.RefreshAsync()).Changed)
+            {
+                await (_realEstate is not null || _realEstateError is not null ? Task.WhenAll(LoadAsync(), LoadRealEstateAsync()) : LoadAsync());
+            }
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            // The dashboard is already showing; the values are by the index as last saved.
+        }
+
+        // Then today's prices for the holdings, so net worth is current, and reload if any moved.
+        try
+        {
+            if (!Prices.Enabled) return;
+            _prices = await Prices.RefreshAsync();
+            if (_prices.Applied.Repriced > 0)
+            {
+                await (_breakdown == Breakdown.Assets ? Task.WhenAll(LoadAsync(), LoadHoldingsAsync()) : LoadAsync());
+            }
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            // The dashboard is already showing; the prices are as last saved.
+        }
+    }
+
+    private Task ChangeTagsAsync(IReadOnlyList<string> tagIds)
+    {
+        _tagIds = tagIds;
+        return LoadAsync();
+    }
+
+    private async Task ChangePeriod(ChangeEventArgs e)
+    {
+        _period = _periods.Single(p => p.Key == (string?)e.Value);
+        await LoadAsync();
+    }
+
+    private async Task ChangeAccountsAsync(IReadOnlyList<string> accountIds)
+    {
+        _accountIds = accountIds;
+        await Preferences.SetAsync(AccountsPreference, _accountIds);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var version = ++_loadVersion;
+        try
+        {
+            _error = null;
+            var accounts = Store.GetAccountsAsync();
+            var summary = await Store.GetDashboardAsync(_period.From, _period.To, accountIds: _accountIds, tagIds: _tagIds);
+            var loaded = await accounts;
+            if (version != _loadVersion) return; // a newer period or account pick is loading
+            (_summary, _accounts) = (summary, loaded);
+            // Balances, the period or the accounts may have changed: net worth and account value by month are worked out again.
+            (_netWorth, _netWorthError) = (null, null);
+            _netWorthVersion++;
+            (_accountValue, _accountValueError) = (null, null);
+            _accountValueVersion++;
+            if (_chart == Chart.NetWorth) await LoadNetWorthAsync();
+            if (_chart == Chart.AccountValue) await LoadAccountValueAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            if (version == _loadVersion) _error = $"Couldn't load the dashboard: {ex.Message}";
+            return;
+        }
+
+        // Forget accounts deleted since they were picked, and load again without them.
+        if (_accountIds.Any(id => _accounts.All(a => a.AccountId != id)))
+        {
+            await ChangeAccountsAsync(_accountIds.Where(id => _accounts.Any(a => a.AccountId == id)).ToList());
+            return;
+        }
+
+        // Keep the selection across a period change where it still applies.
+        if (_month is { } m && !_summary.Monthly.Any(x => x.Year == m.Year && x.Month == m.Month)) _month = null;
+        _focusKey = null; // the period changed, so the leading pick's totals did too
+        await SelectionChangedAsync();
+    }
+
+    /// <summary>The refresh button: reloads the totals, chart, bars and panel, keeping the selection.</summary>
+    private Task RefreshAsync()
+    {
+        _refreshVersion++; // supersedes a pending refresh after a category change
+        var loads = new List<Task> { LoadAsync() };
+        if (_holdings is not null || _holdingsError is not null) loads.Add(LoadHoldingsAsync());
+        if (_realEstate is not null || _realEstateError is not null) loads.Add(LoadRealEstateAsync());
+        return Task.WhenAll(loads);
+    }
+
+    private Task SelectMonthAsync(MonthlyCashFlow? month)
+    {
+        _month = month;
+        (_holding, _assetAccount, _realEstatePick) = (null, null, null); // back to the transactions, for the month
+        return SelectionChangedAsync();
+    }
+
+    private Task SelectCategoryAsync(CategoryChoice? category)
+    {
+        _category = category;
+        return SelectionChangedAsync();
+    }
+
+    private Task SelectionChangedAsync()
+    {
+        // The first pick leads; when it's cleared, the other one (if any) takes over.
+        if (_lead == Lead.Month && _month is null || _lead == Lead.Category && _category is null) _lead = Lead.None;
+        if (_lead == Lead.None) _lead = _month is not null ? Lead.Month : _category is not null ? Lead.Category : Lead.None;
+        return Task.WhenAll(LoadFocusAsync(), LoadListAsync());
+    }
+
+    /// <summary>The leading pick's own totals: the month's (for the bars) or the category's over the period (for the chart).</summary>
+    private async Task LoadFocusAsync()
+    {
+        var (from, to, category, sub, kind) = _lead switch
+        {
+            Lead.Month => (ListRange().From, ListRange().To, (string?)null, (string?)null, (CategoryKind?)null),
+            Lead.Category => (_period.From, _period.To, _category!.Category, _category.SubCategory, _category.Kind),
+            _ => (default(DateOnly), default(DateOnly), null, null, null),
+        };
+        var key = _lead == Lead.None ? null : $"{_lead}|{from}|{to}|{category}|{sub}|{kind}|{string.Join(',', _accountIds)}|{string.Join(',', _tagIds)}";
+        if (key == _focusKey) return;
+        _focusKey = key;
+
+        var version = ++_focusVersion;
+        _focus = null;
+        if (key is null) return;
+        try
+        {
+            var summary = await Store.GetDashboardAsync(from, to, category, sub, _accountIds, kind, _tagIds);
+            if (version == _focusVersion) _focus = summary;
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            // The views stay on the whole period; the panel reports load errors.
+        }
+    }
+
+    private string BarsPeriod => _lead == Lead.Month && _month is { } m && _focus is not null ? $" · {Display.Month(m.Year, m.Month)}" : "";
+
+    private async Task LoadListAsync()
+    {
+        var version = ++_listVersion;
+        _listError = null;
+        if (!IsFiltered)
+        {
+            _list = _summary?.RecentTransactions.Take(ListSize).ToList();
+            return;
+        }
+
+        _list = null;
+        var (from, to) = ListRange();
+        try
+        {
+            var list = await Store.SearchTransactionsAsync(new TransactionFilter(from, to, Category: _category?.Category, Limit: ListSize, SubCategory: _category?.SubCategory, AccountIds: _accountIds, Kind: _category?.Kind, TagIds: _tagIds));
+            if (version == _listVersion) _list = list;
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            if (version == _listVersion) _listError = $"Couldn't load the transactions: {ex.Message}";
+        }
+    }
+
+    /// <summary>The selected month, clipped to the dashboard's period so it adds up to the bars; otherwise the whole period.</summary>
+    private (DateOnly From, DateOnly To) ListRange()
+    {
+        if (_month is not { } month) return (_period.From, _period.To);
+        var first = new DateOnly(month.Year, month.Month, 1);
+        var last = first.AddMonths(1).AddDays(-1);
+        return (first < _period.From ? _period.From : first, last > _period.To ? _period.To : last);
+    }
+
+    /// <summary>The Transactions page with the panel's filters, for the complete list.</summary>
+    private string FullListLink()
+    {
+        var (from, to) = ListRange();
+        // An empty accountId says "all accounts", rather than the Transactions page's remembered ones.
+        var query = _accountIds.Count == 0 ? "accountId=&" : string.Concat(_accountIds.Select(id => $"accountId={Uri.EscapeDataString(id)}&"));
+        if (_category is not null) query += $"category={Uri.EscapeDataString(_category.Category)}&";
+        if (_category?.SubCategory is { } sub) query += $"subCategory={Uri.EscapeDataString(sub)}&";
+        if (_category is { Kind: { } kind } c && Categories.KindDependsOnDirection(c.Category)) query += $"kind={kind}&";
+        query += string.Concat(_tagIds.Select(id => $"tag={Uri.EscapeDataString(id)}&"));
+        return $"transactions?{query}from={Display.Iso(from)}&to={Display.Iso(to)}";
+    }
+
+    private string AccountName(string accountId) => _accounts?.FirstOrDefault(a => a.AccountId == accountId)?.DisplayName ?? "";
+
+    /// <summary>
+    /// A category changed in the panel (one row, or several "similar" ones in a row): show it there
+    /// at once, then refresh the totals, chart and bars once the changes stop. The panel keeps its
+    /// rows, so a transaction moved out of the selected category doesn't vanish under the cursor.
+    /// </summary>
+    private Task ClassificationChangedAsync(LedgerTransaction updated)
+    {
+        if (_list?.ToList() is { } list)
+        {
+            var index = list.FindIndex(i => i.Transaction.AccountId == updated.Transaction.AccountId && i.Transaction.TransactionId == updated.Transaction.TransactionId);
+            if (index >= 0)
+            {
+                list[index] = updated;
+                _list = list;
+            }
+        }
+
+        _ = RefreshTotalsAsync(++_refreshVersion);
+        return Task.CompletedTask;
+    }
+
+    private int _refreshVersion;
+
+    private async Task RefreshTotalsAsync(int version)
+    {
+        await Task.Delay(250);
+        if (version != _refreshVersion) return;
+        try
+        {
+            var summary = await Store.GetDashboardAsync(_period.From, _period.To, accountIds: _accountIds, tagIds: _tagIds);
+            if (version != _refreshVersion) return;
+            _summary = summary;
+            _focusKey = null;
+            await LoadFocusAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            // The change is saved; the totals catch up on the next load.
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private static string ChoiceLabel(CategoryChoice choice) =>
+        choice.SubCategory == Categories.NoSubCategory ? $"{choice.Category} › No detail"
+        : choice.Kind is { } kind && Categories.KindDependsOnDirection(choice.Category) ? $"{choice.Label} {KindLabel(kind)}"
+        : choice.Label;
+
+    private static string KindLabel(CategoryKind kind) => kind == CategoryKind.Income ? "income" : "spending";
+
+    private string NetText() => (_summary!.Net >= 0 ? "+" : "") + Money.FormatWhole(_summary.Net);
+
+    private string SavingsRate() =>
+        _summary is { Income: > 0 } s ? $"{(s.Net / s.Income).ToString("0%", System.Globalization.CultureInfo.InvariantCulture)} of income saved" : "No income recorded";
+}

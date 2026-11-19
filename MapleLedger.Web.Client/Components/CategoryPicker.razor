@@ -1,0 +1,344 @@
+@* A two-level category picker. The button reads like a select ("Auto & Transport › Gas"); it opens a
+   panel with the top-level categories on the left and the highlighted one's sub-categories on the
+   right. Hovering, focusing or tapping a category shows its sub-categories; "Just <category>" files
+   a transaction at the top level, a sub-category files it with that detail. Each column ends with
+   a way to add a category of your own. Typing in the search box above the columns swaps them for
+   one list of the matching categories and details; Enter picks the first. *@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@inject CategoryCatalog Catalog
+
+<button type="button" @ref="_button" class="form-select form-select-sm text-start category-picker-toggle" title="@Categories.Label(Category, SubCategory)"
+        aria-haspopup="dialog" aria-expanded="@(_open ? "true" : "false")" aria-label="@($"{AriaLabel}: {Categories.Label(Category, SubCategory)}")"
+        disabled="@Disabled" @onclick="ToggleAsync">
+    <span class="category-picker-value">@Categories.Label(Category, SubCategory)</span>
+</button>
+
+@if (_open)
+{
+    <div class="category-picker-backdrop" @onclick="CloseAsync"></div>
+    <div class="category-picker-panel" @ref="_panel" role="dialog" aria-label="Choose a category" @onkeydown="KeyAsync">
+        <div class="category-picker-search">
+            <input @ref="_searchInput" type="search" class="form-control form-control-sm" aria-label="Search categories" placeholder="Search categories"
+                   @bind="_query" @bind:event="oninput" @onkeydown="SearchKeyAsync" @onkeydown:stopPropagation="true" />
+        </div>
+        @if (_query.Trim().Length > 0)
+        {
+            var matches = Matches().ToList();
+            <div class="category-picker-column category-picker-results" role="group" aria-label="Matching categories">
+                @foreach (var (category, sub) in matches)
+                {
+                    var current = category == Category && sub == SubCategory;
+                    <button type="button" class="category-picker-item @(current ? "is-current" : "")" aria-current="@(current ? "true" : null)"
+                            @onclick="() => ChooseAsync(category, sub)">
+                        <span class="text-truncate">
+                            @if (sub is null)
+                            {
+                                @category
+                            }
+                            else
+                            {
+                                <span class="category-picker-match-parent">@($"{category} › ")</span>@sub
+                            }
+                        </span>
+                    </button>
+                }
+                @if (matches.Count == 0)
+                {
+                    <p class="small text-body-secondary m-2">No categories match “@_query.Trim()”.</p>
+                }
+            </div>
+        }
+        else
+        {
+        <div class="category-picker-column" role="group" aria-label="Categories">
+            @foreach (var node in _tree)
+            {
+                <button type="button" class="category-picker-item @(node.Name == _group ? "is-active" : "") @(node.Name == Category ? "is-current" : "")"
+                        aria-current="@(node.Name == Category && SubCategory is null ? "true" : null)"
+                        @onclick="() => PickGroupAsync(node)" @onmouseenter="() => Hover(node.Name)" @onfocus="() => Hover(node.Name)">
+                    <span class="text-truncate">@node.Name</span>
+                    @if (node.Name != Categories.Uncategorized)
+                    {
+                        <span class="category-picker-chevron" aria-hidden="true">›</span>
+                    }
+                </button>
+            }
+            <div class="category-picker-divider" role="separator"></div>
+            @if (_adding == AddKind.Category)
+            {
+                @AddForm("New category", "Counts as spending. For income, add a detail under Income.")
+            }
+            else
+            {
+                <button type="button" class="category-picker-item category-picker-add" @onclick="() => StartAdding(AddKind.Category)">+ New category</button>
+            }
+        </div>
+        <div class="category-picker-column category-picker-details" role="group" aria-label="@($"{_group} details")">
+            @if (_group is { } group && Categories.Find(_tree, group) is { } current)
+            {
+                @if (current.Name == Categories.Uncategorized)
+                {
+                    <p class="small text-body-secondary m-2">Uncategorized has no details.</p>
+                }
+                else
+                {
+                    <button type="button" class="category-picker-item @(group == Category && SubCategory is null ? "is-current" : "")" @onclick="() => ChooseAsync(group, null)">
+                        <span class="text-truncate">Just @group</span>
+                    </button>
+                    @if (current.SubCategories.Count > 0)
+                    {
+                        <div class="category-picker-divider" role="separator"></div>
+                    }
+                    @foreach (var sub in current.SubCategories)
+                    {
+                        <button type="button" class="category-picker-item @(group == Category && sub == SubCategory ? "is-current" : "")"
+                                aria-current="@(group == Category && sub == SubCategory ? "true" : null)" @onclick="() => ChooseAsync(group, sub)">
+                            <span class="text-truncate">@sub</span>
+                        </button>
+                    }
+                    <div class="category-picker-divider" role="separator"></div>
+                    @if (_adding == AddKind.Detail)
+                    {
+                        @AddForm($"New detail of {group}", null)
+                    }
+                    else
+                    {
+                        <button type="button" class="category-picker-item category-picker-add" @onclick="() => StartAdding(AddKind.Detail)">+ Add detail</button>
+                    }
+                }
+            }
+        </div>
+        }
+    </div>
+}
+
+@code {
+    private enum AddKind { None, Category, Detail }
+
+    [Parameter] public string? Category { get; set; }
+    [Parameter] public string? SubCategory { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string AriaLabel { get; set; } = "Category";
+
+    /// <summary>A different category was chosen.</summary>
+    [Parameter] public EventCallback<CategoryChoice> OnChange { get; set; }
+
+    private ElementReference _button, _panel, _input, _searchInput;
+    private bool _open, _placePending, _focusInput, _focusSearch, _saving;
+    private string _query = "";
+    private string? _group;
+    private IReadOnlyList<CategoryNode> _tree = Categories.Tree;
+    private IJSObjectReference? _module, _anchor;
+
+    // Adding a category of your own.
+    private AddKind _adding;
+    private string _newName = "";
+    private string? _addError;
+
+    private RenderFragment AddForm(string label, string? hint) => __builder =>
+    {
+        <div class="category-picker-form" @onkeydown:stopPropagation="true">
+            <input @ref="_input" class="form-control form-control-sm" aria-label="@label" placeholder="@label" maxlength="@CustomCategory.MaxNameLength"
+                   @bind="_newName" @bind:event="oninput" @onkeydown="AddKeyAsync" disabled="@_saving" />
+            <div class="d-flex gap-1 mt-1">
+                <button type="button" class="btn btn-sm btn-primary py-0" @onclick="AddAsync" disabled="@(_saving || string.IsNullOrWhiteSpace(_newName))">Add</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary py-0" @onclick="StopAdding" disabled="@_saving">Cancel</button>
+            </div>
+            @if (_addError is not null)
+            {
+                <div class="small text-danger mt-1">@_addError</div>
+            }
+            else if (hint is not null)
+            {
+                <div class="small text-body-secondary mt-1">@hint</div>
+            }
+        </div>
+    };
+
+    private async Task ToggleAsync()
+    {
+        if (_open)
+        {
+            await CloseAsync();
+            return;
+        }
+
+        _tree = await Catalog.GetTreeAsync();
+        _group = Categories.Find(_tree, Category) is not null ? Category : _tree[0].Name;
+        StopAdding();
+        _query = "";
+        _open = _placePending = _focusSearch = true;
+    }
+
+    /// <summary>
+    /// Categories and details whose name contains the search text, in tree order. A matching
+    /// category brings its details along ("auto" lists every Auto &amp; Transport detail).
+    /// </summary>
+    private IEnumerable<(string Category, string? SubCategory)> Matches()
+    {
+        var text = _query.Trim();
+        foreach (var node in _tree)
+        {
+            var nodeMatches = node.Name.Contains(text, StringComparison.OrdinalIgnoreCase);
+            if (nodeMatches) yield return (node.Name, null);
+            foreach (var sub in node.SubCategories)
+            {
+                if (nodeMatches || sub.Contains(text, StringComparison.OrdinalIgnoreCase)) yield return (node.Name, sub);
+            }
+        }
+    }
+
+    private async Task SearchKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            if (_query.Length > 0)
+            {
+                _query = "";
+                return;
+            }
+
+            await CloseAsync();
+            await _button.FocusAsync();
+        }
+        else if (e.Key == "Enter" && _query.Trim().Length > 0 && Matches().FirstOrDefault() is { Category: not null } first)
+        {
+            await ChooseAsync(first.Category, first.SubCategory);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_placePending)
+        {
+            _placePending = false;
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/popover.js");
+            _anchor = await _module.InvokeAsync<IJSObjectReference>("anchor", _button, _panel);
+        }
+
+        // Straight into the search box with a keyboard and mouse; not on a phone, where it would
+        // pop the keyboard up over the list.
+        if (_focusSearch)
+        {
+            _focusSearch = false;
+            if (_module is not null && await _module.InvokeAsync<bool>("hasFinePointer")) await _searchInput.FocusAsync();
+        }
+
+        if (_focusInput)
+        {
+            _focusInput = false;
+            await _input.FocusAsync();
+        }
+    }
+
+    private void Hover(string group)
+    {
+        // Moving to another category abandons a half-typed detail for the previous one.
+        if (_group != group && _adding == AddKind.Detail) StopAdding();
+        _group = group;
+    }
+
+    /// <summary>Uncategorized is chosen at once; other categories show their details (for touch, where there's no hover).</summary>
+    private Task PickGroupAsync(CategoryNode node)
+    {
+        Hover(node.Name);
+        return node.Name == Categories.Uncategorized ? ChooseAsync(node.Name, null) : Task.CompletedTask;
+    }
+
+    private async Task ChooseAsync(string category, string? subCategory)
+    {
+        await CloseAsync();
+        if (category != Category || subCategory != SubCategory)
+        {
+            await OnChange.InvokeAsync(new CategoryChoice(category, subCategory));
+        }
+    }
+
+    private void StartAdding(AddKind kind)
+    {
+        (_adding, _newName, _addError, _focusInput) = (kind, "", null, true);
+    }
+
+    private void StopAdding() => (_adding, _newName, _addError) = (AddKind.None, "", null);
+
+    private async Task AddKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await AddAsync();
+        else if (e.Key == "Escape") StopAdding();
+    }
+
+    /// <summary>A new detail files this transaction under it straight away; a new category opens, ready for "Just" or a detail.</summary>
+    private async Task AddAsync()
+    {
+        if (_saving || string.IsNullOrWhiteSpace(_newName) || _group is null && _adding == AddKind.Detail) return;
+        _saving = true;
+        _addError = null;
+        try
+        {
+            var added = await Catalog.AddAsync(_adding == AddKind.Detail ? new CustomCategoryRequest(_group!, _newName) : new CustomCategoryRequest(_newName));
+            _tree = await Catalog.GetTreeAsync();
+            StopAdding();
+            if (added.SubCategory is { } sub)
+            {
+                await ChooseAsync(added.Category, sub);
+            }
+            else
+            {
+                _group = added.Category;
+            }
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _addError = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task KeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key != "Escape") return;
+        await CloseAsync();
+        await _button.FocusAsync();
+    }
+
+    private async Task CloseAsync()
+    {
+        _open = false;
+        StopAdding();
+        await ReleaseAnchorAsync();
+    }
+
+    private async Task ReleaseAnchorAsync()
+    {
+        if (_anchor is null) return;
+        try
+        {
+            await _anchor.InvokeVoidAsync("dispose");
+            await _anchor.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+
+        _anchor = null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await ReleaseAnchorAsync();
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+    }
+}

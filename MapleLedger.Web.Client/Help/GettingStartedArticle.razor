@@ -1,0 +1,57 @@
+@inject UserSession Session
+
+<div class="help-article">
+    <p class="help-lead">
+        LoonieBooks shows where your money goes, what you're worth across all your accounts, and gathers the year's
+        tax-deductible spending by CRA line. You bring the transactions in from your bank; nothing connects to your
+        bank or needs your banking password.
+    </p>
+
+    <h3>1. Add your accounts</h3>
+    <p>
+        On <a href="accounts">Accounts</a>, choose <span class="help-ui">Add account</span> for each chequing, savings, credit card,
+        line of credit, loan or investment account you want to follow. A name and a type are enough; the balance can come
+        from your first import. <a href="help?a=accounts">More about accounts</a>.
+    </p>
+
+    <h3>2. Bring in their transactions</h3>
+    <p>On <a href="import">Import</a>, pick the account, then any of:</p>
+    <ul>
+        <li><strong>Copy and paste</strong> the transaction list from your bank's website: select it, <kbd>Ctrl</kbd>+<kbd>C</kbd>,
+            then <kbd>Ctrl</kbd>+<kbd>V</kbd> in the box. <a href="help?a=import">How pasting works</a>.</li>
+        <li><strong>Statement files</strong>: drop in PDF statements or CSV exports you've downloaded, a whole year at once if you like.</li>
+        <li><strong>Pictures</strong>: a screen capture, a screenshot, or a photo of a paper statement.
+            <a href="help?a=statement-files">Files and pictures</a>.</li>
+    </ul>
+    <p>Check the preview, then <span class="help-ui">Import</span>. Importing the same transactions again is safe: they're skipped.</p>
+
+    <h3>3. Check the categories</h3>
+    <p>
+        Every transaction gets a category automatically, from LoonieBooks' rules for Canadian merchants or from what you
+        chose for the same merchant before. Those automatic ones are marked as needing review. On
+        <a href="transactions?reviewed=false">Transactions</a>, set <span class="help-ui">Category review</span> to
+        <em>Needs review</em>, fix the ones that are wrong, and confirm the rest with ✓.
+        <a href="help?a=categorizing">Categories and review</a>.
+    </p>
+
+    <h3>4. Use it</h3>
+    <ul>
+        <li>The <a href="./">Dashboard</a> shows income, spending, cash flow and net worth, by month and by category.</li>
+        <li><a href="tags">Tags</a> group transactions across categories, such as everything for a rental property or a trip.</li>
+        <li>The <a href="tax">Tax report</a> collects medical expenses, donations, child care, RRSP contributions and more,
+            ready to check, attach receipts to and print. <a href="help?a=tax-report">About the tax report</a>.</li>
+    </ul>
+
+    @if (Session.Storage == StorageLocation.Browser)
+    {
+        <p class="help-caution">
+            Your ledger is kept in this browser only. Clearing the browser's site data, or using another browser or device,
+            starts from an empty ledger, so <a href="data">download a backup</a> now and then.
+            <a href="help?a=your-data">Where your data is kept</a>.
+        </p>
+    }
+
+    <p class="help-note">
+        LoonieBooks is a record-keeping aid, not tax or financial advice.
+    </p>
+</div>

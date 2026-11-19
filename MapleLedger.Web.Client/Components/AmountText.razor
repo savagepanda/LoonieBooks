@@ -1,0 +1,12 @@
+@* Money in carries a leading "+"; money out is plain. Direction is also spelled out for screen readers. *@
+<span class="amount @(Transaction.DebitCreditMemo == DebitCreditMemo.Credit ? "amount-in" : "amount-out")">
+    <span class="visually-hidden">@(Transaction.DebitCreditMemo == DebitCreditMemo.Credit ? "Money in" : "Money out")</span>
+    @(Transaction.DebitCreditMemo == DebitCreditMemo.Credit ? "+" : "")@Money.Format(Transaction.Amount, Currency)
+</span>
+
+@code {
+    [Parameter, EditorRequired] public Transaction Transaction { get; set; } = default!;
+
+    /// <summary>The account's currency: transactions don't carry one.</summary>
+    [Parameter, EditorRequired] public string Currency { get; set; } = Money.Cad;
+}

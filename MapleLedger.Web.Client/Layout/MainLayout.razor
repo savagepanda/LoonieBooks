@@ -1,0 +1,115 @@
+@inherits LayoutComponentBase
+@inject UserSession Session
+@inject NavigationManager Navigation
+
+@* The StockTreeMap look: a blue app bar across the top, a white menu down the left and a slim
+   footer, with the page between them. The menu button hides the menu on a wide screen and opens
+   it over the page on a phone. *@
+<div class="ml-shell @(_navToggled ? "nav-toggled" : null)">
+    <header class="ml-header">
+        <button type="button" class="ml-menu-button" aria-label="Menu" aria-expanded="@(_navToggled ? "true" : "false")" @onclick="ToggleNav">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z" /></svg>
+        </button>
+        <a class="ml-brand" href="" title="LoonieBooks home">
+            <svg class="ml-flag" viewBox="0 0 9600 4800" role="img" aria-label="Flag of Canada">
+                <rect width="9600" height="4800" fill="#d52b1e" />
+                <rect x="2400" width="4800" height="4800" fill="#fff" />
+                <path transform="translate(2400 0)" fill="#d52b1e" d="@MapleLeaf" />
+            </svg>
+            <span class="ml-brand-name">LoonieBooks</span>
+        </a>
+
+        <div class="ml-header-actions">
+            <a href="data" class="ml-storage d-none d-md-inline" title="Where your ledger is stored">@StorageLabel</a>
+            <PageHelpButton />
+            @* The desktop app has no sign-in (its owner is just this computer's Windows account),
+               so it shows no user name. *@
+            @if (Session.IsDesktop)
+            {
+                @if (Session.IsLanHost)
+                {
+                    <ConnectPhone />
+                }
+                @if (Session.IsLanDevice)
+                {
+                    <form method="post" action="account/logout" class="m-0">
+                        <button type="submit" class="btn btn-sm ml-header-link" title="Ask for the household passcode again on this device">Sign out</button>
+                    </form>
+                }
+            }
+            else if (Session.IsSignedIn)
+            {
+                <span class="ml-user d-none d-sm-inline">@(Session.Name ?? Session.Email)</span>
+                <form method="post" action="account/logout" class="m-0">
+                    <button type="submit" class="btn btn-sm ml-header-link">Sign out</button>
+                </form>
+            }
+            else if (Session.SignInAvailable)
+            {
+                <button class="btn btn-sm btn-light ml-sign-in" @onclick="SignIn">Sign in with Google</button>
+            }
+        </div>
+    </header>
+
+    <div class="ml-frame">
+        <aside class="ml-sidebar" @onclick="CloseNav">
+            <NavMenu />
+        </aside>
+        @if (_navToggled)
+        {
+            <div class="ml-backdrop" @onclick="CloseNav"></div>
+        }
+
+        <main class="ml-body">
+            <article class="content px-3 px-md-4 pb-4">
+                @Body
+            </article>
+        </main>
+    </div>
+
+    <footer class="ml-footer">
+        <span class="ml-disclaimer">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 0.5 14.5h15L8 1Zm-.75 5h1.5v4.5h-1.5V6Zm0 5.5h1.5V13h-1.5v-1.5Z" /></svg>
+            A record-keeping aid, not tax or financial advice.
+        </span>
+        <span class="ml-footer-links">
+            <a href="data" class="d-md-none" title="Where your ledger is stored">@StorageLabel</a>
+            <span class="d-none d-sm-inline">© @DateTime.Now.Year LoonieBooks</span>
+        </span>
+    </footer>
+</div>
+
+@* Starts the browser database worker and applies its migrations. *@
+<SqliteWasmBlazor.SqliteWasmDatabaseInitializer />
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+@code {
+    // The maple leaf of the Flag of Canada (public domain), drawn in its 4800-unit centre square.
+    private const string MapleLeaf =
+        "m2490 4430-45-863a95 95 0 0 1 111-98l859 151-116-320a65 65 0 0 1 20-73l941-762-212-99a65 65 0 0 1-34-79" +
+        "l186-572-542 115a65 65 0 0 1-73-38l-105-247-423 454a65 65 0 0 1-111-57l204-1052-327 189a65 65 0 0 1-91-27" +
+        "l-332-652-332 652a65 65 0 0 1-91 27l-327-189 204 1052a65 65 0 0 1-111 57l-423-454-105 247a65 65 0 0 1-73 38" +
+        "l-542-115 186 572a65 65 0 0 1-34 79l-212 99 941 762a65 65 0 0 1 20 73l-116 320 859-151a95 95 0 0 1 111 98l-45 863z";
+
+    // Wide screens: true hides the menu. Phones: true shows it over the page.
+    private bool _navToggled;
+
+    private string StorageLabel =>
+        Session.Storage == StorageLocation.Browser ? "Stored in this browser only"
+        : Session.IsDesktop ? "Stored in LoonieBooks' database" : "Stored on this server";
+
+    private void ToggleNav() => _navToggled = !_navToggled;
+
+    // A click in the menu (a link) closes it on a phone. On a wide screen the menu is only visible
+    // when _navToggled is already false, so this changes nothing there.
+    private void CloseNav() => _navToggled = false;
+
+    // Sign-in is a server round trip to Google, so it must be a full page load, not client routing.
+    private void SignIn() =>
+        Navigation.NavigateTo($"account/login?returnUrl={Uri.EscapeDataString("/" + Navigation.ToBaseRelativePath(Navigation.Uri))}", forceLoad: true);
+}

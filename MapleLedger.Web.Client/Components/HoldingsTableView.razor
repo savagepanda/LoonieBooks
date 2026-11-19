@@ -1,0 +1,120 @@
+@using System.Globalization
+@using MapleLedger.Core.Investments
+
+@* Holdings as a table: values in Canadian dollars, with the original amount under any in another currency. *@
+<div class="table-responsive">
+    <table class="table table-sm align-middle mb-1">
+        <thead>
+            <tr>
+                <th>Holding</th>
+                <th class="text-end">Quantity</th>
+                <th class="text-end">Price</th>
+                <th class="text-end">Market value</th>
+                @if (_hasBook)
+                {
+                    <th class="text-end">Book value</th>
+                    <th class="text-end">Gain</th>
+                }
+                @if (ShowShare)
+                {
+                    <th class="text-end">Share</th>
+                }
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var h in Holdings)
+            {
+                var foreign = h.Currency != Holding.Cad;
+                <tr>
+                    <td>
+                        <span class="fw-semibold">@h.Label</span>
+                        @if (h.Symbol is not null && h.Description is not null)
+                        {
+                            <div class="small text-body-secondary">@h.Description</div>
+                        }
+                        else if (h.Option is { } option)
+                        {
+                            <div class="small text-body-secondary">@option.Describe()</div>
+                        }
+                    </td>
+                    <td class="text-end">
+                        @(h.Quantity is { } q ? Number(q) : "")
+                        @if (h.Multiplier > 1 && h.Quantity is not null)
+                        {
+                            <div class="small text-body-secondary" title="Each option contract covers 100 shares; its price is per share">× 100 shares</div>
+                        }
+                    </td>
+                    <td class="text-end">
+                        @(h.Price is { } p ? Money.FormatPrice(p, h.Currency) : "")
+                        @if (h.PriceSource == HoldingPriceSource.Quote && h.PriceAsOf is { } quoted)
+                        {
+                            <div class="small text-body-secondary" title="Price from the quote feed">@Display.Moment(quoted)</div>
+                        }
+                    </td>
+                    <td class="text-end">
+                        @Money.Format(h.MarketValueCad)
+                        @if (foreign)
+                        {
+                            <div class="small text-body-secondary">@Money.Format(h.MarketValue, h.Currency)</div>
+                        }
+                    </td>
+                    @if (_hasBook)
+                    {
+                        <td class="text-end">@(h.BookValueCad is { } b ? Money.Format(b) : "")</td>
+                        <td class="text-end @(h.GainCad < 0 ? "text-danger" : "")">
+                            @if (h.GainCad is { } gain)
+                            {
+                                @Money.FormatSigned(gain)
+                                @if (h.BookValue is > 0)
+                                {
+                                    <div class="small text-body-secondary">@Percent(gain / h.BookValueCad!.Value)</div>
+                                }
+                            }
+                        </td>
+                    }
+                    @if (ShowShare)
+                    {
+                        <td class="text-end text-body-secondary">@(_total > 0 ? Percent(h.MarketValueCad / _total) : "")</td>
+                    }
+                </tr>
+            }
+        </tbody>
+        <tfoot>
+            <tr class="fw-semibold">
+                <td>Total</td>
+                <td></td>
+                <td></td>
+                <td class="text-end">@Money.Format(_total)</td>
+                @if (_hasBook)
+                {
+                    <td class="text-end">@Money.Format(Holdings.Sum(h => h.BookValueCad ?? 0))</td>
+                    <td class="text-end">@Money.FormatSigned(Holdings.Sum(h => h.GainCad ?? 0))</td>
+                }
+                @if (ShowShare)
+                {
+                    <td></td>
+                }
+            </tr>
+        </tfoot>
+    </table>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<Holding> Holdings { get; set; } = [];
+
+    /// <summary>Show each holding's share of the total.</summary>
+    [Parameter] public bool ShowShare { get; set; }
+
+    private bool _hasBook;
+    private decimal _total;
+
+    protected override void OnParametersSet()
+    {
+        _hasBook = Holdings.Any(h => h.BookValue is not null);
+        _total = Holdings.Sum(h => h.MarketValueCad);
+    }
+
+    private static string Number(decimal value) => value.ToString("#,0.####", CultureInfo.InvariantCulture);
+
+    private static string Percent(decimal share) => share.ToString("0.0%", CultureInfo.InvariantCulture);
+}

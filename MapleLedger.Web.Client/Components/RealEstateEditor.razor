@@ -1,0 +1,274 @@
+@using MapleLedger.Core.Investments
+@using MapleLedger.Core.RealEstate
+@inject ILedgerStore Store
+
+@* The Accounts page's real estate: each property's value (carried by its area's house price index),
+   the loans secured by it and its equity. *@
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-4 mb-2">
+    <h2 class="h5 mb-0">
+        Real estate
+        @if (Equities.Any(e => e.Equity is not null))
+        {
+            <span class="text-body-secondary fw-normal">@Money.Format(Equities.Sum(e => e.Equity ?? 0)) equity</span>
+        }
+    </h2>
+    @if (_editing is null)
+    {
+        <button class="btn btn-outline-primary btn-sm" @onclick="StartAdd">Add property</button>
+    }
+</div>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger py-2">@_error</div>
+}
+
+@if (_editing is not null)
+{
+    <div class="card mb-3">
+        <div class="card-body">
+            <h3 class="h6">@(_editingId is null ? "Add a property" : "Edit property")</h3>
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label" for="property-name">Name</label>
+                    <input id="property-name" class="form-control" @bind="_editing.Name" placeholder="e.g. 12 Elm St or Cottage" maxlength="@RealEstateProperty.MaxNameLength" />
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="property-city">City or area</label>
+                    <input id="property-city" class="form-control" list="hpi-areas" @bind="_editing.City" @bind:event="oninput" placeholder="e.g. Oakville" maxlength="@RealEstateProperty.MaxCityLength" />
+                    <datalist id="hpi-areas">
+                        @foreach (var region in Index.Book.Regions)
+                        {
+                            <option value="@region.Name">@region.Label</option>
+                        }
+                    </datalist>
+                    <div class="form-text">@CityHint(_editing.City)</div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="property-value">Value</label>
+                    <input id="property-value" class="form-control" type="number" min="0" step="1000" @bind="_editing.Value" />
+                    <div class="form-text">A purchase price, appraisal or assessment.</div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="property-asof">Value as of</label>
+                    <input id="property-asof" class="form-control" type="date" @bind="_editing.ValueAsOf" />
+                    <div class="form-text">When the value was right, such as the purchase date.</div>
+                </div>
+                <div class="col-12">
+                    <div class="form-label">Loans secured by it</div>
+                    @if (Loans.Count == 0)
+                    {
+                        <p class="small text-body-secondary mb-0">No mortgages or lines of credit yet. Add them as accounts above.</p>
+                    }
+                    else
+                    {
+                        <div class="d-flex flex-wrap gap-3">
+                            @foreach (var loan in Loans)
+                            {
+                                var id = loan.AccountId;
+                                var elsewhere = Properties.FirstOrDefault(p => p.Id != _editingId && p.AccountIds.Contains(id));
+                                <div class="form-check">
+                                    <input id="loan-@id" class="form-check-input" type="checkbox" checked="@_editing.AccountIds.Contains(id)" @onchange="() => ToggleLoan(id)" />
+                                    <label class="form-check-label" for="loan-@id">
+                                        @loan.DisplayName <span class="text-body-secondary small">@AccountKind.LabelFor(loan)@(elsewhere is null ? "" : $" · now {elsewhere.Name}")</span>
+                                    </label>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+            <div class="mt-3 d-flex gap-2">
+                <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_saving">Save</button>
+                <button class="btn btn-outline-secondary" @onclick="() => _editing = null">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
+@if (Properties.Count == 0 && _editing is null)
+{
+    <p class="small text-body-secondary">
+        Add your home or other property to see its equity: its value less the mortgages and home equity lines secured by it.
+        It counts towards net worth.
+    </p>
+}
+else if (Properties.Count > 0)
+{
+    <div class="table-responsive">
+        <table class="table align-middle">
+            <thead>
+                <tr>
+                    <th>Property</th><th class="text-end">Value</th><th class="text-end">Owed</th><th class="text-end">Equity</th>
+                    <th class="text-end" title="What's owed as a share of the value">Loan-to-value</th><th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var e in Equities)
+                {
+                    var p = e.Property;
+                    <tr>
+                        <td>
+                            @p.Name @if (p.City is not null) { <span class="text-body-secondary small">@p.City</span> }
+                            <div class="small text-body-secondary">
+                                @(e.Loans.Count == 0 ? "No loans linked" : string.Join(", ", e.Loans.Select(l => l.Account.DisplayName)))
+                            </div>
+                        </td>
+                        <td class="text-end text-nowrap">
+                            @(e.Value is { } v ? Money.Format(v.Value) : "—")
+                            @if (e.Value is { } est)
+                            {
+                                <div class="small text-body-secondary">@ValueNote(p, est)</div>
+                            }
+                        </td>
+                        <td class="text-end text-nowrap">@Money.Format(e.Owed)</td>
+                        <td class="text-end text-nowrap fw-semibold">@(e.Equity is { } equity ? Money.Format(equity) : "—")</td>
+                        <td class="text-end text-nowrap">@(e.LoanToValue is { } ltv ? Percent(ltv) : "—")</td>
+                        <td class="text-end text-nowrap">
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => StartEdit(p)">Edit</button>
+                            @if (_confirmDelete == p.Id)
+                            {
+                                <button class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(p)">Delete property</button>
+                            }
+                            else
+                            {
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = p.Id">Delete</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    <p class="small text-body-secondary">@IndexNote</p>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<Account> Accounts { get; set; } = [];
+    [Parameter, EditorRequired] public IReadOnlyList<RealEstateProperty> Properties { get; set; } = [];
+
+    /// <summary>The house price index readings that carry the values forward.</summary>
+    [Parameter] public IReadOnlyList<HpiReading> Readings { get; set; } = [];
+
+    /// <summary>The last look at ownquity.com's index: the areas to pick from, and each property's.</summary>
+    [Parameter] public HpiRefresh Index { get; set; } = HpiRefresh.Off;
+    [Parameter] public CurrencyRates Rates { get; set; } = CurrencyRates.None;
+
+    /// <summary>After a property changed: the page reloads them.</summary>
+    [Parameter] public EventCallback Changed { get; set; }
+
+    private PropertyForm? _editing;
+    private string? _editingId;
+    private string? _confirmDelete;
+    private string? _error;
+    private bool _saving;
+
+    private IReadOnlyList<PropertyEquity> Equities => PropertyValuation.Equities(Properties, Readings, Accounts, Rates);
+
+    /// <summary>The accounts a property can secure: loans and lines of credit, not credit cards.</summary>
+    private List<Account> Loans => Accounts.Where(IsLoan).OrderBy(a => a.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
+
+    public static bool IsLoan(Account a) => a.IsLiability && a.AccountType != AccountType.CreditCard && a.Status != AccountStatus.Closed;
+
+    /// <summary>Under the city field: which area's index the value will follow, as it's typed.</summary>
+    private string CityHint(string? city) =>
+        Index.Book.Count == 0 ? "The area whose house price index carries the value forward."
+        : string.IsNullOrWhiteSpace(city) ? "Pick an area from the list, or type the city: its house price index carries the value forward."
+        : Index.Book.Find(city) is { } region ? $"Follows the {region.Label} house price index."
+        : "No house price index for this name. Pick an area from the list, or the value stays as entered.";
+
+    private string ValueNote(RealEstateProperty p, PropertyEstimate e)
+    {
+        if (e is { ByIndex: true, IndexChange: { } change })
+        {
+            var area = Index.RegionOf(p.Id)?.Name ?? p.City;
+            return $"{Money.FormatWhole(p.Value!.Value)} in {Display.Month(e.From!.Month.Year, e.From.Month.Month)}, {area} index {(change >= 0 ? "+" : "")}{Percent(change)} to {Display.Month(e.To!.Month.Year, e.To.Month.Month)}";
+        }
+
+        return Index.Unmatched(p.Id) ? $"as entered, {Display.Date(e.AsOf)}; no house price index for {p.City}" : $"as entered, {Display.Date(e.AsOf)}";
+    }
+
+    /// <summary>Under the table: where the index comes from and how current it is.</summary>
+    private string IndexNote =>
+        Index switch
+        {
+            { SaveFailed: true } => "Couldn't save the latest house price index; values use the index as last saved.",
+            { Book.Count: 0, Unreachable: true } => "Couldn't reach ownquity.com for the house price index; values use the index as last saved.",
+            { Book: { Count: > 0, Through: { } through } book } =>
+                $"Values follow each area's {book.IndexName ?? "house price index"}, from {book.Source ?? "ownquity.com"}, to {Display.Month(through.Year, through.Month)}. Estimates for your own records, not appraisals.",
+            _ => "Values are as entered. Give a property its city or area to carry its value forward by the area's house price index.",
+        };
+
+
+    private static string Percent(decimal share) => share.ToString("0.0%", System.Globalization.CultureInfo.InvariantCulture);
+
+    private void StartAdd()
+    {
+        (_editingId, _error) = (null, null);
+        _editing = new PropertyForm { City = Properties.Select(p => p.City).FirstOrDefault(c => c is not null) };
+    }
+
+    private void StartEdit(RealEstateProperty p)
+    {
+        (_editingId, _error) = (p.Id, null);
+        _editing = new PropertyForm
+        {
+            Name = p.Name,
+            City = p.City,
+            Value = p.Value,
+            ValueAsOf = p.ValueAsOf?.ToDateTime(TimeOnly.MinValue),
+            AccountIds = [.. p.AccountIds],
+        };
+    }
+
+    private void ToggleLoan(string id)
+    {
+        if (!_editing!.AccountIds.Remove(id)) _editing.AccountIds.Add(id);
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_editing is not { } form) return;
+        await RunAsync(async () =>
+        {
+            var request = new PropertyRequest(form.Name ?? "", form.City, form.Value, form.ValueAsOf is { } d ? DateOnly.FromDateTime(d) : null, [.. form.AccountIds]);
+            if (_editingId is null) await Store.CreatePropertyAsync(request);
+            else await Store.UpdatePropertyAsync(_editingId, request);
+            _editing = null;
+        });
+    }
+
+    private Task DeleteAsync(RealEstateProperty p) => RunAsync(async () =>
+    {
+        await Store.DeletePropertyAsync(p.Id);
+        _confirmDelete = null;
+    });
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        _saving = true;
+        _error = null;
+        try
+        {
+            await action();
+            await Changed.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private sealed class PropertyForm
+    {
+        public string? Name { get; set; }
+        public string? City { get; set; }
+        public decimal? Value { get; set; }
+        public DateTime? ValueAsOf { get; set; }
+        public HashSet<string> AccountIds { get; set; } = [];
+    }
+}

@@ -1,0 +1,100 @@
+@using System.Net.Http.Json
+@inject HttpClient Http
+
+@* "Connect a phone" on the computer sharing a desktop install: a one-time QR code that signs the
+   phone in without the household passcode. *@
+
+<button class="btn btn-sm btn-outline-primary" @onclick="OpenAsync" disabled="@_loading">Connect a phone</button>
+
+@if (_open)
+{
+    <div class="modal d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="connect-phone-title" @onkeydown="Key">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="connect-phone-title">Connect a phone</h2>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="Close"></button>
+                </div>
+                <div class="modal-body text-center">
+                    @if (_error is not null)
+                    {
+                        <div class="alert alert-warning text-start mb-0">@_error</div>
+                    }
+                    else if (_pairing is { } pairing)
+                    {
+                        <div class="fw-semibold">Scan this with your phone's camera</div>
+                        <div class="phone-relay-qr mx-auto my-2" role="img" aria-label="QR code that connects a phone">@((MarkupString)pairing.QrSvg)</div>
+                        <div class="small text-body-secondary">
+                            The phone must be on the same Wi-Fi as this computer. It opens LoonieBooks signed in, with
+                            no passcode to type. The code works once, until
+                            @pairing.ExpiresAt.ToLocalTime().ToString("h:mm tt", System.Globalization.CultureInfo.InvariantCulture).
+                        </div>
+                        <div class="small text-break mt-1"><code>@Origin(pairing.Url)</code></div>
+                        <div class="small text-body-secondary text-start mt-3">
+                            If the phone warns that the connection isn't private, it doesn't trust LoonieBooks'
+                            certificate yet. Install it from the passcode page (<code>@Origin(pairing.Url)/lan/signin</code>)
+                            on that phone once, or continue past the warning.
+                        </div>
+                    }
+                    else
+                    {
+                        <div><span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>Making a code…</div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    @if (_pairing is not null || _error is not null)
+                    {
+                        <button class="btn btn-outline-secondary" @onclick="OpenAsync" disabled="@_loading">New code</button>
+                    }
+                    <button class="btn btn-primary" @onclick="Close">Done</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop show"></div>
+}
+
+@code {
+    private bool _open;
+    private bool _loading;
+    private LanPairing? _pairing;
+    private string? _error;
+
+    private async Task OpenAsync()
+    {
+        _open = true;
+        _loading = true;
+        _pairing = null;
+        _error = null;
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "lan/pair");
+            request.Headers.Add(ServerLedgerStore.RequestHeader, "1");
+            using var response = await Http.SendAsync(request);
+            await ServerLedgerStore.EnsureSuccess(response);
+            _pairing = await response.Content.ReadFromJsonAsync<LanPairing>() ?? throw new LedgerStoreException("The server returned an empty response.");
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private void Close()
+    {
+        _open = false;
+        _pairing = null;
+    }
+
+    private void Key(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") Close();
+    }
+
+    /// <summary>The address without the one-time code, which only belongs in the QR code.</summary>
+    private static string Origin(string url) => new Uri(url).GetLeftPart(UriPartial.Authority);
+}

@@ -1,0 +1,104 @@
+@using MapleLedger.Core.Investments
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+@* One account's balance at the end of each month, in its own currency, with a picker for the account
+   beside the title. For a loan, line of credit or card, the line is what's owed. Turning the mouse wheel
+   over the chart steps through the accounts (wwwroot/js/wheelpick.js). *@
+
+<div style="display: contents" @ref="_area">
+<MonthLineChart Title="Account value by month" AriaLabel="@($"{Picked?.Label ?? "The account"}'s value at the end of each month")"
+                Points="_points" Currency="@Currency" Message="@Message" MessageIsError="Error is not null"
+                Note="@(Months?.Any(m => m.Estimated) == true ? "estimated" : null)" NoteTitle="@EstimateNote"
+                Selected="Selected" OnSelect="PointSelected">
+    <HeaderContent>
+        <select @ref="_picker" class="form-select form-select-sm w-auto account-value-pick" aria-label="Account" value="@AccountId" @onchange="PickAsync"
+                title="Scroll over the chart to step through the accounts">
+            @foreach (var (account, label) in Accounts)
+            {
+                <option value="@account.AccountId">@label@(account.Status == AccountStatus.Closed ? " (closed)" : "")</option>
+            }
+        </select>
+    </HeaderContent>
+</MonthLineChart>
+</div>
+
+@code {
+    /// <summary>The accounts to pick from, with the names they go by.</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<(Account Account, string Label)> Accounts { get; set; } = [];
+
+    [Parameter] public string? AccountId { get; set; }
+
+    [Parameter] public EventCallback<string> AccountIdChanged { get; set; }
+
+    /// <summary>The picked account's values; null while they load.</summary>
+    [Parameter] public IReadOnlyList<MonthlyAccountValue>? Months { get; set; }
+
+    [Parameter] public string? Error { get; set; }
+
+    [Parameter] public (int Year, int Month)? Selected { get; set; }
+
+    [Parameter] public EventCallback<MonthlyAccountValue?> OnSelect { get; set; }
+
+    private IReadOnlyList<MonthLineChart.Point> _points = [];
+
+    private (Account Account, string Label)? Picked => Accounts.Where(a => a.Account.AccountId == AccountId).Select(a => ((Account, string)?)a).FirstOrDefault();
+
+    private string Currency => Picked is { } p ? CurrencyRates.CurrencyOf(p.Account) : Money.Cad;
+
+    private bool Owed => Picked?.Account.IsLiability == true;
+
+    private string? Message =>
+        Error ?? (Picked is null ? "Pick an account."
+            : Picked.Value.Account is { CurrentBalance: null, Status: not AccountStatus.Closed } ? "No balance is set for this account. Set it on the Accounts page to see its value by month."
+            : Months is null ? "Loading…"
+            : Months.Count == 0 ? "Nothing to show for this period."
+            : null);
+
+    protected override void OnParametersSet() =>
+        _points = (Months ?? []).Select(m => new MonthLineChart.Point(m.Year, m.Month, m.Value, Tooltip(m))).ToList();
+
+    private const string EstimateNote =
+        "Estimated: worked back from the account's balance, with its listed holdings at each month's closing price "
+        + "(from stocktreemap.com) as if held in the same quantities throughout. Not your broker's figures.";
+
+    private string Tooltip(MonthlyAccountValue m) =>
+        $"{MonthLineChart.When(m.Year, m.Month, m.AsOf)}: {(Owed ? "owed " : "")}{Money.Format(m.Value, Currency)}{(m.Estimated ? " (estimated from month-end prices)" : "")}";
+
+    private Task PickAsync(ChangeEventArgs e) => AccountIdChanged.InvokeAsync((string?)e.Value ?? "");
+
+    private EventCallback<MonthLineChart.Point?> PointSelected =>
+        OnSelect.HasDelegate ? EventCallback.Factory.Create<MonthLineChart.Point?>(this, SelectAsync) : default;
+
+    private Task SelectAsync(MonthLineChart.Point? point) =>
+        OnSelect.InvokeAsync(point is null ? null : Months?.FirstOrDefault(m => m.Year == point.Year && m.Month == point.Month));
+
+    private ElementReference _area, _picker;
+    private IJSObjectReference? _module, _wheel;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            _module = await JS.InvokeAsync<IJSObjectReference>("import", "./js/wheelpick.js");
+            _wheel = await _module.InvokeAsync<IJSObjectReference>("attach", _area, _picker);
+        }
+        catch (JSDisconnectedException) { }
+        catch (TaskCanceledException) { }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_wheel is not null)
+            {
+                await _wheel.InvokeVoidAsync("detach");
+                await _wheel.DisposeAsync();
+            }
+            if (_module is not null) await _module.DisposeAsync();
+        }
+        catch (JSDisconnectedException) { }
+    }
+}

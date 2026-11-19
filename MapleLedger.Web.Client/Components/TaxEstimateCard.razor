@@ -1,0 +1,418 @@
+@* The tax estimate on the tax report: per person, or a household summary when the report shows everyone. *@
+@using System.Globalization
+
+<div class="card mb-3 tax-estimate">
+    <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-baseline gap-2 mb-2">
+            <h2 class="h5 mb-0">Estimated tax for @Set.Year</h2>
+            <a class="small" href="@SituationLink">Province and whose income</a>
+        </div>
+
+        @if (!Set.RatesAvailable)
+        {
+            <p class="mb-0 text-body-secondary">
+                LoonieBooks has federal and provincial rates for @string.Join(", ", TaxRates.Years.Order()) only, so it can't estimate @Set.Year tax.
+            </p>
+        }
+        else if (People.Count == 0)
+        {
+            <p class="mb-0 text-body-secondary">Claims not assigned to anyone aren't part of any estimate. Choose a person to see theirs.</p>
+        }
+        else if (People.All(p => p.Estimate is null))
+        {
+            <p class="mb-0">
+                Choose @(People.Count == 1 && People[0].PersonId == TaxSituations.Self ? "your" : "each person's") province under
+                <a href="@SituationLink">Household</a>. LoonieBooks works out the tax on the Salary, Business Income and Rental Income
+                deposits in the ledger, takes off the deductions and credits tagged here (RRSP, donations, medical, child care…) and
+                shows roughly what's left to pay or get back.
+            </p>
+        }
+        else
+        {
+            @if (People.Count > 1)
+            {
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-2">
+                        <thead>
+                            <tr class="small text-body-secondary">
+                                <th>Person</th>
+                                <th class="text-end">Total income</th>
+                                @if (AnyRental)
+                                {
+                                    <th class="text-end" title="Included in total income: rents less the rental expenses tagged (Form T776)">of which net rental</th>
+                                }
+                                <th class="text-end">Income tax</th>
+                                <th class="text-end">Already paid</th>
+                                <th class="text-end">Balance</th>
+                                <th class="text-end">Marginal rate</th>
+                                <th class="text-end">RRSP room left</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var person in People)
+                            {
+                                <tr @key="person.PersonId">
+                                    <td><a href="tax?year=@Set.Year&person=@Uri.EscapeDataString(person.PersonId)">@person.Name</a>
+                                        @if (person.Estimate is { } est)
+                                        {
+                                            <span class="small text-body-secondary">· @est.ProvinceName</span>
+                                        }
+                                    </td>
+                                    @if (person.Estimate is { } e)
+                                    {
+                                        <td class="text-end">@Money.FormatWhole(e.TotalIncome)</td>
+                                        @if (AnyRental)
+                                        {
+                                            <td class="text-end">
+                                                @if (e.Rental is { } rental)
+                                                {
+                                                    <div>@NetRentalText(rental.Net)</div>
+                                                    <div class="small text-body-secondary text-nowrap">@Money.FormatWhole(rental.Rents) rent − @Money.FormatWhole(rental.Expenses) expenses</div>
+                                                    @if (rental.TaxSaved > 0)
+                                                    {
+                                                        <div class="small text-body-secondary text-nowrap">expenses save @Money.FormatWhole(rental.TaxSaved) tax</div>
+                                                    }
+                                                }
+                                            </td>
+                                        }
+                                        <td class="text-end">@Money.FormatWhole(e.TotalPayable)</td>
+                                        <td class="text-end">@Money.FormatWhole(e.TotalPaid)</td>
+                                        <td class="text-end">
+                                            <div class="fw-semibold @(e.IsRefund ? "text-success" : "")">@BalanceText(e)</div>
+                                            @if (e.NotWithheldTotal > 0)
+                                            {
+                                                <div class="small text-body-secondary">none withheld on @Money.FormatWhole(e.NotWithheldTotal) @TaxEstimator.NotWithheldKinds(e.NotWithheld)</div>
+                                            }
+                                        </td>
+                                        <td class="text-end">@Percent(e.MarginalRate)</td>
+                                        <td class="text-end">@(e.Rrsp is { } r ? Money.FormatWhole(r.Left) + (r.LimitEstimated ? "*" : "") : "")</td>
+                                    }
+                                    else
+                                    {
+                                        <td colspan="@(AnyRental ? 7 : 6)" class="small text-body-secondary">No province chosen yet</td>
+                                    }
+                                </tr>
+                            }
+                        </tbody>
+                        @if (People.Count(p => p.Estimate is not null) > 1)
+                        {
+                            var all = People.Where(p => p.Estimate is not null).Select(p => p.Estimate!).ToList();
+                            var balance = all.Sum(e => e.Balance);
+                            <tfoot>
+                                <tr class="fw-semibold">
+                                    <td>Household</td>
+                                    <td class="text-end">@Money.FormatWhole(all.Sum(e => e.TotalIncome))</td>
+                                    @if (AnyRental)
+                                    {
+                                        var rentals = all.Where(e => e.Rental is not null).Select(e => e.Rental!).ToList();
+                                        <td class="text-end">
+                                            <div>@NetRentalText(rentals.Sum(r => r.Net))</div>
+                                            <div class="small fw-normal text-body-secondary text-nowrap">@Money.FormatWhole(rentals.Sum(r => r.Rents)) rent − @Money.FormatWhole(rentals.Sum(r => r.Expenses)) expenses</div>
+                                            @if (rentals.Sum(r => r.TaxSaved) > 0)
+                                            {
+                                                <div class="small fw-normal text-body-secondary text-nowrap">expenses save @Money.FormatWhole(rentals.Sum(r => r.TaxSaved)) tax</div>
+                                            }
+                                        </td>
+                                    }
+                                    <td class="text-end">@Money.FormatWhole(all.Sum(e => e.TotalPayable))</td>
+                                    <td class="text-end">@Money.FormatWhole(all.Sum(e => e.TotalPaid))</td>
+                                    <td class="text-end @(balance < 0 ? "text-success" : "")">@(balance < 0 ? $"{Money.FormatWhole(-balance)} refund" : $"{Money.FormatWhole(balance)} owing")</td>
+                                    <td></td>
+                                    <td></td>
+                                </tr>
+                            </tfoot>
+                        }
+                    </table>
+                </div>
+                var owingUnwithheld = People.Where(p => p.Estimate is { Balance: > 0, NotWithheldTotal: > 0 }).Select(p => p.Estimate!).ToList();
+                @if (owingUnwithheld.Count > 0)
+                {
+                    <p class="small mb-1">
+                        No tax is taken off @TaxEstimator.NotWithheldKinds(owingUnwithheld.SelectMany(e => e.NotWithheld)), so the tax on it is in the balance owing,
+                        due April 30, @(Set.Year + 1).
+                        @if (owingUnwithheld.Any(e => e.Balance > TaxRates.InstalmentThreshold))
+                        {
+                            <span>
+                                With more than @Money.FormatWhole(TaxRates.InstalmentThreshold) owing, CRA expects quarterly instalments when @(Set.Year - 1) or
+                                @(Set.Year - 2) was also over it, and sends a reminder with the amounts.
+                            </span>
+                        }
+                    </p>
+                }
+                <p class="small text-body-secondary mb-0">
+                    Pick a person above (or in the menu at the top) for their full calculation.
+                    @if (People.Any(p => p.Estimate?.Rental?.Projected == true))
+                    {
+                        <span>Rents are projected to December 31 from the deposits so far; rental expenses are only what's tagged so far.</span>@(" ")
+                    }
+                    @if (People.Any(p => p.Estimate?.Rrsp?.LimitEstimated == true))
+                    {
+                        <span>* RRSP room estimated from this year's pay; enter each limit from the notice of assessment for the real figure.</span>
+                    }
+                </p>
+            }
+            else if (People[0].Estimate is { } e)
+            {
+                <div class="row g-3 mb-3">
+                    <div class="col-6 col-lg-3"><StatTile Label="@(e.IsRefund ? "Estimated refund" : "Estimated balance owing")" Value="@Money.FormatWhole(Math.Abs(e.Balance))" Detail="@($"{People[0].Name}, {e.ProvinceName}")" /></div>
+                    <div class="col-6 col-lg-3"><StatTile Label="Income tax" Value="@Money.FormatWhole(e.TotalPayable)" Detail="@($"{Percent(e.AverageRate)} of income")" /></div>
+                    <div class="col-6 col-lg-3"><StatTile Label="Already paid" Value="@Money.FormatWhole(e.TotalPaid)" Detail="@(e.NotWithheldTotal > 0 ? $"None on {Money.FormatWhole(e.NotWithheldTotal)} {TaxEstimator.NotWithheldKinds(e.NotWithheld)}" : "Likely withheld from pay")" /></div>
+                    <div class="col-6 col-lg-3"><StatTile Label="Marginal rate" Value="@Percent(e.MarginalRate)" Detail="On your next dollar" /></div>
+                </div>
+
+                @if (e.Rrsp is { } rrsp)
+                {
+                    <div class="border rounded p-2 mb-3 small rrsp-room">
+                        <div class="d-flex flex-wrap justify-content-between align-items-baseline gap-2">
+                            <span class="fw-semibold">RRSP room for @Set.Year</span>
+                            <span>
+                                <strong>@Money.FormatWhole(rrsp.Left)</strong> left of @Money.FormatWhole(rrsp.Limit)
+                                @if (rrsp.LimitEstimated)
+                                {
+                                    <span class="text-body-secondary">(estimated)</span>
+                                }
+                            </span>
+                        </div>
+                        @if (rrsp.Limit > 0)
+                        {
+                            var used = Math.Min(100m, rrsp.Contributed / rrsp.Limit * 100);
+                            <div class="progress my-1" style="height: .5rem" role="progressbar" aria-label="RRSP room used"
+                                 aria-valuenow="@((int)used)" aria-valuemin="0" aria-valuemax="100">
+                                <div class="progress-bar" style="width: @(used.ToString("0.#", CultureInfo.InvariantCulture))%"></div>
+                            </div>
+                        }
+                        <div class="text-body-secondary">
+                            @if (rrsp.Contributed > 0)
+                            {
+                                <span>Going in: @string.Join(", ", RrspParts(rrsp)).</span>
+                            }
+                            @if (rrsp.LimitEstimated)
+                            {
+                                <span>
+                                    The limit is estimated as 18% of this year's earned income (up to @Money.FormatWhole(rrsp.DollarLimit))@(rrsp.PensionAdjustment > 0 ? $", less the {Money.FormatWhole(rrsp.PensionAdjustment)} pension adjustment" : ""),
+                                    as if last year's pay@(rrsp.PensionAdjustment > 0 ? " and pension were" : " was") similar, without unused room from earlier years. Enter the limit from your notice of assessment
+                                    under <a href="@SituationLink">Household</a> for the real figure.
+                                </span>
+                            }
+                        </div>
+                        @if (rrsp.Left > 0 && rrsp.SavingsIfUsed > 0)
+                        {
+                            <div class="mt-1">
+                                Contributing the remaining @Money.FormatWhole(rrsp.Left) would lower this tax by about <strong>@Money.FormatWhole(rrsp.SavingsIfUsed)</strong>
+                                (@Percent(rrsp.SavingsIfUsed / rrsp.Left) on average).
+                                @if (rrsp.AtMarginalRate > 0 && rrsp.AtMarginalRate < rrsp.Left)
+                                {
+                                    <span>The first @Money.FormatWhole(rrsp.AtMarginalRate) comes off income taxed at your @Percent(e.MarginalRate) marginal rate; after that each dollar saves less.</span>
+                                }
+                                else if (e.RrspSavingsPer1000 is { } per1000 && per1000 > 0)
+                                {
+                                    <span>Each CA$1,000 saves about @Money.FormatWhole(per1000).</span>
+                                }
+                                <span>Contributions until @Display.Date(TaxReportBuilder.RrspDeadline(Set.Year)) can count, and the deduction can also be saved for a later year.</span>
+                            </div>
+                        }
+                        else if (rrsp.Left == 0)
+                        {
+                            <div class="mt-1">The @Set.Year limit is used up.</div>
+                        }
+                        @if (rrsp.NextYearRoom is { } next)
+                        {
+                            <div class="mt-1 text-body-secondary">
+                                This year's pay adds about @Money.FormatWhole(next) of new room for @rrsp.NextYear@(rrsp.PensionAdjustment > 0 ? $", after the {Money.FormatWhole(rrsp.PensionAdjustment)} pension adjustment" : "").
+                            </div>
+                        }
+                    </div>
+                }
+                else if (e.RrspSavingsPer1000 is { } savings && savings > 0)
+                {
+                    <div class="alert alert-info small py-2">
+                        Each extra CA$1,000 of RRSP deduction would lower this tax by about <strong>@Money.FormatWhole(savings)</strong>.
+                        @if (e.RrspRoomLeft is { } room)
+                        {
+                            <span>You have @Money.FormatWhole(room) of deduction limit left for @Set.Year.</span>
+                        }
+                        <span>Contributions until @Display.Date(TaxReportBuilder.RrspDeadline(Set.Year)) can count.</span>
+                    </div>
+                }
+
+                @if (e.Rental is { } rental)
+                {
+                    <div class="border rounded p-2 mb-3 small rental-summary">
+                        <div class="fw-semibold mb-1">Rental income for @Set.Year <span class="fw-normal text-body-secondary">(Form T776, line 12600)</span></div>
+                        <table class="table table-sm mb-1">
+                            <tbody>
+                                <tr>
+                                    <td>
+                                        Rents@(rental.Share is { } share ? $", with your {Percent(share)} share of joint property" : "")
+                                        @if (rental.Projected)
+                                        {
+                                            @(" ")<span class="text-body-secondary">(projected to Dec 31)</span>
+                                        }
+                                    </td>
+                                    <td class="text-end text-nowrap">@Money.Format(rental.Rents)</td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        Less rental expenses tagged@(rental.Share is not null ? ", with your share of those no one claimed" : "") ·
+                                        <a href="tax?year=@Set.Year#tax-@TaxCategories.Rental">see them</a>
+                                    </td>
+                                    <td class="text-end text-nowrap">−@Money.Format(rental.Expenses)</td>
+                                </tr>
+                                <tr class="fw-semibold">
+                                    <td>@(rental.Net < 0 ? "Net rental loss, which comes off other income" : "Net rental income, in total income")</td>
+                                    <td class="text-end text-nowrap">@Money.Format(rental.Net)</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                        @if (rental.TaxSaved > 0)
+                        {
+                            // Whole dollars first, so the three amounts add up as shown.
+                            var now = Math.Round(e.Balance, MidpointRounding.AwayFromZero);
+                            var without = Math.Round(e.Balance + rental.TaxSaved, MidpointRounding.AwayFromZero);
+                            <div>
+                                Without these expenses the tax would be about <strong>@Money.FormatWhole(without - now)</strong> higher:
+                                @(now >= 0
+                                    ? $"{Money.FormatWhole(without)} owing instead of {Money.FormatWhole(now)}."
+                                    : without > 0
+                                        ? $"{Money.FormatWhole(without)} owing instead of a {Money.FormatWhole(-now)} refund."
+                                        : $"a {Money.FormatWhole(-without)} refund instead of {Money.FormatWhole(-now)}.")
+                            </div>
+                        }
+                        <div class="text-body-secondary mt-1">
+                            @if (rental.Projected)
+                            {
+                                <span>Rents are projected from the deposits so far; the expenses are only what's tagged so far.</span>
+                            }
+                            <span>
+                                Only the interest part of a mortgage payment is a rental expense, not the principal: set the interest share as the percent on
+                                those claims under Rental property expenses. Improvements that last are capital costs, not current expenses.
+                            </span>
+                        </div>
+                    </div>
+                }
+
+                <details>
+                    <summary class="small">How it's worked out</summary>
+                    <div class="table-responsive mt-2">
+                        <table class="table table-sm mb-0 tax-estimate-lines">
+                            @Section("Income", e.Income, "Total income", e.TotalIncome, "Line 15000")
+                            @Section("Deductions", e.Deductions, "Net income", e.NetIncome, "Line 23600")
+                            @Section("Federal tax", e.Federal, "Net federal tax", e.FederalTax, "Line 42000")
+                            @Section($"{e.ProvinceName} tax", e.Provincial, $"{e.ProvinceName} tax", e.ProvincialTax, "Line 42800")
+                            @if (e.Other.Count > 0)
+                            {
+                                @Section("Other amounts payable", e.Other, null, 0, null)
+                            }
+                            <tbody>
+                                <tr class="fw-semibold"><td>Total payable</td><td class="small text-body-secondary">Line 43500</td><td class="text-end">@Money.Format(e.TotalPayable)</td></tr>
+                            </tbody>
+                            @Section("Already paid", e.Paid, "Total credits", e.TotalPaid, "Line 48200")
+                            <tbody>
+                                <tr class="fw-semibold border-top">
+                                    <td>@(e.IsRefund ? "Refund" : "Balance owing")</td>
+                                    <td class="small text-body-secondary">Line 48500</td>
+                                    <td class="text-end @(e.IsRefund ? "text-success" : "")">@Money.Format(Math.Abs(e.Balance))</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+
+                @if (e.Notes.Count > 0)
+                {
+                    <ul class="small mt-2 mb-0">
+                        @foreach (var note in e.Notes)
+                        {
+                            <li>@note</li>
+                        }
+                    </ul>
+                }
+            }
+
+            @if (Set.UnassignedIncome is { Count: > 0 } unassignedIncome && Person is null or "")
+            {
+                <div class="small text-warning-emphasis mt-2">
+                    @unassignedIncome.Count income deposit(s) in shared accounts (@Money.Format(unassignedIncome.Sum(t => t.Transaction.SignedAmount))) aren't
+                    assigned to anyone, so no estimate counts them. <a href="@SituationLink.Replace("#household", "#shared-income")">Choose whose they are</a>.
+                </div>
+            }
+
+            @if (Set.UnassignedClaims > 0 && Person is null or "")
+            {
+                <div class="small text-warning-emphasis mt-2">
+                    @Set.UnassignedClaims confirmed claim(s) (@Money.Format(Set.UnassignedAmount)) aren't assigned to anyone, so no estimate counts them.
+                    <a href="tax?year=@Set.Year&person=@TaxReportBuilder.Unassigned">Assign them</a>.
+                </div>
+            }
+
+            <p class="small text-body-secondary mt-2 mb-0">
+                A rough picture to plan with, not a return or tax advice. Net pay is worked back to a salary as if tax, CPP, EI and the ESPP,
+                group RRSP and pension contributions you entered were the only deductions, and the employer is assumed to withhold the right tax on it.
+                Business and rental deposits are taken as received, before tax, less the expenses tagged for them. It uses @Set.Year federal and provincial rates and
+                basic credits, Ontario's surtax and Health Premium and BC's tax reduction, and leaves out spouse and dependant amounts, the age,
+                disability and pension amounts, investment income, benefits and carry-forwards. Your notice of assessment is the final word.
+            </p>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public TaxEstimateSet Set { get; set; } = null!;
+
+    /// <summary>The report's person filter: null for everyone, a member id, or <see cref="TaxReportBuilder.Unassigned"/>.</summary>
+    [Parameter] public string? Person { get; set; }
+
+    [Parameter] public string SituationLink { get; set; } = "#household";
+
+    private IReadOnlyList<PersonTaxEstimate> People => Person switch
+    {
+        null or "" => Set.People,
+        TaxReportBuilder.Unassigned => [],
+        _ => Set.People.Where(p => p.PersonId == Person).ToList(),
+    };
+
+    private bool AnyRental => People.Any(p => p.Estimate?.Rental is not null);
+
+    private static string NetRentalText(decimal net) => net < 0 ? $"{Money.FormatWhole(-net)} loss" : Money.FormatWhole(net);
+
+    private static string Percent(decimal rate) => (rate * 100).ToString("0.#", CultureInfo.InvariantCulture) + "%";
+
+    private static IEnumerable<string> RrspParts(RrspRoom r)
+    {
+        if (r.Payroll > 0) yield return $"{Money.FormatWhole(r.Payroll)} from your pay";
+        if (r.EmployerMatch > 0) yield return $"{Money.FormatWhole(r.EmployerMatch)} employer match";
+        if (r.Tagged > 0) yield return $"{Money.FormatWhole(r.Tagged)} tagged contributions";
+    }
+
+    private static string BalanceText(TaxEstimate e) =>
+        e.IsRefund ? $"{Money.FormatWhole(-e.Balance)} refund" : $"{Money.FormatWhole(e.Balance)} owing";
+
+    private static RenderFragment Section(string title, IReadOnlyList<TaxEstimateLine> lines, string? totalLabel, decimal total, string? totalReference) => __builder =>
+    {
+        <tbody>
+            <tr><th colspan="3" class="pt-3 small text-uppercase text-body-secondary">@title</th></tr>
+            @if (lines.Count == 0)
+            {
+                <tr><td colspan="3" class="small text-body-secondary">None</td></tr>
+            }
+            @foreach (var line in lines)
+            {
+                <tr>
+                    <td>
+                        @line.Label
+                        @if (line.FromLedger)
+                        {
+                            <span class="badge text-bg-light border ms-1" title="From transactions tagged in LoonieBooks">ledger</span>
+                        }
+                    </td>
+                    <td class="small text-body-secondary text-nowrap">@line.Reference</td>
+                    <td class="text-end text-nowrap">@Money.Format(line.Amount)</td>
+                </tr>
+            }
+            @if (totalLabel is not null)
+            {
+                <tr class="fw-semibold"><td>@totalLabel</td><td class="small text-body-secondary">@totalReference</td><td class="text-end">@Money.Format(total)</td></tr>
+            }
+        </tbody>
+    };
+}

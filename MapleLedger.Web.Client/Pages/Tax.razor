@@ -1,0 +1,597 @@
+@page "/tax"
+@inject ILedgerStore Store
+@inject FileDownloader Downloader
+@inject NavigationManager Navigation
+
+<PageTitle>Tax report · LoonieBooks</PageTitle>
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <h1 class="h3 mb-0">Tax report</h1>
+    <div class="d-flex gap-2">
+        <select class="form-select w-auto" aria-label="Tax year" value="@_year" @onchange="YearChanged">
+            @foreach (var y in Periods.TaxYears)
+            {
+                <option value="@y">@y tax year</option>
+            }
+        </select>
+        @if (_household.Count > 0)
+        {
+            <select class="form-select w-auto" aria-label="Whose claims" value="@(_person ?? "")" @onchange="PersonChanged">
+                <option value="">Everyone</option>
+                @foreach (var member in _household)
+                {
+                    <option value="@member.Id">@member.Name</option>
+                }
+                <option value="@TaxReportBuilder.Unassigned">Not assigned</option>
+            </select>
+        }
+        <a class="btn btn-outline-primary" href="tax/summary?@Query(_year, _person)">Printable summary</a>
+        <button class="btn btn-outline-primary" @onclick="ExportCsvAsync">Export CSV</button>
+    </div>
+</div>
+
+<div class="alert alert-secondary small">
+    LoonieBooks collects transactions that may support deductions and credits on your @_year T1 return, with the CRA line
+    they relate to. It is a record-keeping aid, not tax advice: eligibility, limits and thresholds are set by the CRA,
+    and you still need the receipts and slips (attach them here; they're stored with your ledger). Tag transactions on the <a href="transactions?from=@_year-01-01&to=@_year-12-31">transactions page</a>.
+    @if (_year > TaxCategories.ReviewedTaxYear)
+    {
+        <div class="mt-1">CRA line numbers and amounts shown here were last checked for the @TaxCategories.ReviewedTaxYear tax year; check them against the @_year guide.</div>
+    }
+</div>
+
+@if (_estimates is not null)
+{
+    <TaxEstimateCard Set="_estimates" Person="@_person" SituationLink="@($"tax?{Query(_year, _person)}#household")" />
+}
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+else if (_report is null)
+{
+    <p class="text-body-secondary">Loading…</p>
+}
+else if (_report.Categories.Count == 0 && _report.RrspFromNextYear.Count == 0 && _report.ClaimedInOtherYears.Count == 0)
+{
+    <p>No transactions in @_year are tagged as tax-related yet. Imported pharmacy, dental, daycare, donation, RRSP and similar
+        transactions are suggested automatically; you can also tag any transaction from the transactions page.</p>
+    <a class="btn btn-outline-primary" href="tax/review?year=@_year">Look for missed claims</a>
+}
+else
+{
+    <div class="row g-3 mb-3">
+        <div class="col-6 col-lg-3"><StatTile Label="Confirmed" Value="@Money.FormatWhole(_report.Categories.Sum(c => c.Confirmed))" Detail="@($"Across {_report.Categories.Count(c => c.Confirmed != 0)} categories")" /></div>
+        <div class="col-6 col-lg-3"><StatTile Label="Waiting for review" Value="@_report.PendingReview.ToString()" Detail="@($"{Money.FormatWhole(_report.Categories.Sum(c => c.Suggested))} suggested")" /></div>
+        <div class="col-6 col-lg-3"><StatTile Label="Missing receipts" Value="@_report.MissingReceipts.ToString()" Detail="Confirmed claims with no receipt attached" /></div>
+    </div>
+
+    <div class="d-flex flex-wrap gap-2 mb-3">
+        @if (_report.PendingReview > 0)
+        {
+            <a class="btn btn-primary" href="tax/review?year=@_year">Review @_report.PendingReview suggestion(s)</a>
+        }
+        else
+        {
+            <a class="btn btn-outline-primary" href="tax/review?year=@_year">Look for missed claims</a>
+        }
+    </div>
+
+    @foreach (var summary in _report.Categories)
+    {
+        <div class="card mb-3" id="tax-@summary.Category.Code">
+            <div class="card-body">
+                <div class="d-flex flex-wrap justify-content-between gap-2">
+                    <div>
+                        <h2 class="h5 mb-0">@summary.Category.Name</h2>
+                        <div class="small text-body-secondary">@summary.Category.CraReference · @TaxDisplay.KindName(summary.Category.Kind)</div>
+                    </div>
+                    <div class="text-end">
+                        <div class="fs-5 fw-semibold">@Money.Format(summary.Confirmed)</div>
+                        @if (summary.Suggested != 0)
+                        {
+                            <div class="small text-body-secondary">+ @Money.Format(summary.Suggested) to review</div>
+                        }
+                    </div>
+                </div>
+                <p class="small text-body-secondary mt-2 mb-2">@summary.Category.Guidance</p>
+                @if (summary.Category.Code == TaxCategories.Medical)
+                {
+                    <MedicalWindowHelper Year="_year" Person="@_person" Changed="LoadAsync" />
+                }
+                @if (TaxCategories.AllowsBusinessUse(summary.Category.Code))
+                {
+                    var spending = summary.Transactions.Select(t => t.Transaction.Category ?? Categories.Uncategorized).Distinct().Order().ToList();
+                    <div class="border rounded p-2 mt-2">
+                        <div class="fw-semibold">Business-use share</div>
+                        <p class="small text-body-secondary mb-2">
+                            When only part of an expense is for earning income (the home-office share of rent and utilities, the work share
+                            of a phone, internet or car), set the percentage and only that part is counted. Keep a record of how you worked
+                            it out, such as floor area or a vehicle logbook.
+                        </p>
+                        <div class="d-flex flex-wrap align-items-end gap-2">
+                            <div>
+                                <label class="form-label small mb-0" for="bu-pct-@summary.Category.Code">Percent</label>
+                                <input id="bu-pct-@summary.Category.Code" type="number" min="1" max="100" step="1" class="form-control form-control-sm" style="width: 6rem"
+                                       @bind="_bulkPercent" />
+                            </div>
+                            <div>
+                                <label class="form-label small mb-0" for="bu-cat-@summary.Category.Code">of</label>
+                                <select id="bu-cat-@summary.Category.Code" class="form-select form-select-sm w-auto" @bind="_bulkCategory">
+                                    <option value="">every item in @summary.Category.Name</option>
+                                    @foreach (var c in spending)
+                                    {
+                                        <option value="@c">@c items</option>
+                                    }
+                                </select>
+                            </div>
+                            <button class="btn btn-sm btn-outline-primary" @onclick="() => ApplyBusinessUseAsync(summary.Category.Code)">Apply</button>
+                        </div>
+                        @if (_bulkMessage is not null && _bulkMessageFor == summary.Category.Code)
+                        {
+                            <div class="small text-body-secondary mt-1">@_bulkMessage</div>
+                        }
+                    </div>
+                }
+
+                @{ var toReview = summary.Transactions.Count(t => t.Tax?.Status == TaxTagStatus.Suggested); }
+                <details>
+                    <summary class="small">@summary.Transactions.Count transaction(s)@(toReview > 0 ? $" · {toReview} to review" : "")</summary>
+                    <div class="table-responsive mt-2">
+                        <table class="table table-sm align-middle mb-0">
+                            <tbody>
+                                @foreach (var item in summary.Transactions)
+                                {
+                                    <tr @key="(item.Transaction.AccountId, item.Transaction.TransactionId)">
+                                        <td class="text-nowrap">@Display.Date(item.Transaction.EffectiveDate)</td>
+                                        <td>
+                                            <div>@item.Transaction.Description</div>
+                                            @if (item.Transaction.EffectiveDate.Year is var paid && paid != _year)
+                                            {
+                                                <div class="small text-body-secondary">
+                                                    Paid in @paid, claimed for @_year ·
+                                                    <button class="btn btn-sm btn-link p-0 align-baseline" @onclick="() => SetClaimYearAsync(item, null)">claim in @paid instead</button>
+                                                </div>
+                                            }
+                                            <ReceiptList Transaction="item.Transaction" Receipts="_report.ReceiptsFor(item.Transaction)"
+                                                         ShowMissing="item.Tax?.Status == TaxTagStatus.Confirmed" Changed="LoadAsync" />
+                                            @if (_household.Count > 0)
+                                            {
+                                                <div class="d-flex align-items-center gap-1 small mt-1">
+                                                    <label for="claimed-by-@item.Transaction.AccountId-@item.Transaction.TransactionId">Claimed by</label>
+                                                    <select id="claimed-by-@item.Transaction.AccountId-@item.Transaction.TransactionId" class="form-select form-select-sm w-auto py-0"
+                                                            value="@(item.Tax?.ClaimedBy ?? "")" @onchange="e => SetClaimedByAsync(item, (string?)e.Value)">
+                                                        <option value="">Not assigned</option>
+                                                        @foreach (var member in _household)
+                                                        {
+                                                            <option value="@member.Id">@member.Name</option>
+                                                        }
+                                                    </select>
+                                                </div>
+                                            }
+                                        </td>
+                                        <td class="text-end text-nowrap">
+                                            <AmountText Transaction="item.Transaction" Currency="@_accounts.CurrencyOf(item.Transaction.AccountId)" />
+                                            @if (TaxCategories.AllowsBusinessUse(item.Tax?.Code))
+                                            {
+                                                <div class="d-flex justify-content-end align-items-center gap-1 small mt-1">
+                                                    <input type="number" min="1" max="100" step="1" class="form-control form-control-sm py-0 text-end" style="width: 4.5rem"
+                                                           aria-label="Business-use percent" placeholder="100" value="@item.Tax?.BusinessUsePercent"
+                                                           @onchange="e => SetBusinessUseAsync(item, (string?)e.Value)" />
+                                                    <span>%</span>
+                                                </div>
+                                                @if (item.Tax?.BusinessUsePercent is not null)
+                                                {
+                                                    <div class="small text-body-secondary">counts @Money.Format(TaxReportBuilder.ClaimedAmount(item))</div>
+                                                }
+                                            }
+                                        </td>
+                                        <td class="text-end text-nowrap">
+                                            @if (item.Tax?.Status == TaxTagStatus.Suggested)
+                                            {
+                                                <button class="btn btn-sm btn-outline-success" @onclick="() => SetStatusAsync(item, TaxTagStatus.Confirmed)">Claim it</button>
+                                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => SetStatusAsync(item, TaxTagStatus.Rejected)">Not claimable</button>
+                                            }
+                                            else
+                                            {
+                                                <span class="small text-body-secondary me-2">Confirmed</span>
+                                                <button class="btn btn-sm btn-link" @onclick="() => SetStatusAsync(item, TaxTagStatus.Rejected)">Remove</button>
+                                            }
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                </details>
+            </div>
+        </div>
+    }
+
+    @if (_report.RrspFromNextYear.Count > 0)
+    {
+        <div class="card mb-3 border-primary-subtle">
+            <div class="card-body">
+                <h2 class="h5 mb-1">RRSP contributions in the first 60 days of @(_year + 1)</h2>
+                <p class="small text-body-secondary mb-2">
+                    Contributions made from January 1 to @Display.Date(TaxReportBuilder.RrspDeadline(_year)) can be deducted on your @_year return
+                    or a later one, up to your deduction limit. These are currently counted in @(_year + 1). Your RRSP issuer's receipt shows
+                    which period each contribution belongs to.
+                </p>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <tbody>
+                            @foreach (var item in _report.RrspFromNextYear)
+                            {
+                                <tr @key="(item.Transaction.AccountId, item.Transaction.TransactionId)">
+                                    <td class="text-nowrap">@Display.Date(item.Transaction.EffectiveDate)</td>
+                                    <td>
+                                        <div>@item.Transaction.Description</div>
+                                        <ReceiptList Transaction="item.Transaction" Receipts="_report.ReceiptsFor(item.Transaction)" Changed="LoadAsync" />
+                                    </td>
+                                    <td class="text-end text-nowrap"><AmountText Transaction="item.Transaction" Currency="@_accounts.CurrencyOf(item.Transaction.AccountId)" /></td>
+                                    <td class="text-end text-nowrap">
+                                        <button class="btn btn-sm btn-outline-primary" @onclick="() => SetClaimYearAsync(item, _year)">Deduct for @_year</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_report.ClaimedInOtherYears.Count > 0)
+    {
+        <div class="card mb-3">
+            <div class="card-body">
+                <h2 class="h5 mb-1">Paid in @_year, claimed in another year</h2>
+                <p class="small text-body-secondary mb-2">These aren't counted above.</p>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <tbody>
+                            @foreach (var item in _report.ClaimedInOtherYears)
+                            {
+                                var claimYear = TaxReportBuilder.ClaimYear(item);
+                                <tr @key="(item.Transaction.AccountId, item.Transaction.TransactionId)">
+                                    <td class="text-nowrap">@Display.Date(item.Transaction.EffectiveDate)</td>
+                                    <td>
+                                        <div>@item.Transaction.Description</div>
+                                        <div class="small text-body-secondary">@TaxCategories.Find(item.Tax?.Code)?.Name</div>
+                                    </td>
+                                    <td class="text-end text-nowrap"><AmountText Transaction="item.Transaction" Currency="@_accounts.CurrencyOf(item.Transaction.AccountId)" /></td>
+                                    <td class="text-end text-nowrap">
+                                        <a class="small me-2" href="tax?@Query(claimYear, _person)">Claimed for @claimYear</a>
+                                        <button class="btn btn-sm btn-link" @onclick="() => SetClaimYearAsync(item, null)">Claim for @_year instead</button>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+<details id="household" class="card mt-4" open="@_householdOpen">
+    <summary class="card-header small">Household: who claims what, where they live, whose income</summary>
+    <div class="card-body">
+        <p class="small text-body-secondary">
+            Each person files their own return. Add the people in your household, then assign claims to whoever makes them, for
+            example child care to the lower-income spouse, or pooled medical expenses and donations to one person. The report, CSV
+            and printable summary can then be filtered per person, and each person gets their own tax estimate.
+        </p>
+        <HouseholdEditor Members="_household" Changed="HouseholdChangedAsync" />
+
+        @if (_estimates is { RatesAvailable: true } estimates)
+        {
+            <h3 class="h6 mt-4 mb-1">For the tax estimate</h3>
+            <p class="small text-body-secondary">
+                Income comes from Income › Salary, Business Income and Rental Income deposits@(_household.Count > 0 ? " in each person's accounts" : ""),
+                and deductions and credits from the claims on this page. Saved as you change it.
+            </p>
+            var situationPerson = SituationPerson(estimates);
+            <div class="border rounded p-3">
+                @if (estimates.People.Count > 1)
+                {
+                    <div class="d-flex flex-wrap align-items-center gap-2 pb-3 mb-3 border-bottom">
+                        <label class="small fw-semibold" for="situation-person">Person</label>
+                        <select id="situation-person" class="form-select form-select-sm w-auto" value="@situationPerson.PersonId"
+                                @onchange="e => _situationPersonId = (string?)e.Value">
+                            @foreach (var person in estimates.People)
+                            {
+                                <option value="@person.PersonId">@person.Name@(person.Situation.Province is null ? " (no province yet)" : "")</option>
+                            }
+                        </select>
+                    </div>
+                }
+                <TaxSituationEditor @key="situationPerson.PersonId" Year="_year" PersonId="@situationPerson.PersonId" Situation="situationPerson.Situation"
+                                    RentalShare="situationPerson.Income.RentalShare" Changed="LoadAsync" />
+            </div>
+
+            @if (_household.Count > 0 && _accounts.Count > 0)
+            {
+                <h3 class="h6 mt-4 mb-1">Whose accounts</h3>
+                <p class="small text-body-secondary">
+                    Income deposited into someone's account counts as theirs. For a shared account, choose whose each payer's deposits are below.
+                </p>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0 w-auto">
+                        <tbody>
+                            @foreach (var account in _accounts)
+                            {
+                                <tr @key="account.AccountId">
+                                    <td>@account.DisplayName <span class="small text-body-secondary">@account.AccountNumberDisplay</span></td>
+                                    <td>
+                                        <select class="form-select form-select-sm w-auto" aria-label="@($"Whose account {account.DisplayName} is")"
+                                                value="@(_holders.GetValueOrDefault(account.AccountId) ?? "")" @onchange="e => SetHolderAsync(account.AccountId, (string?)e.Value)">
+                                            <option value="">Shared</option>
+                                            @foreach (var member in _household)
+                                            {
+                                                <option value="@member.Id">@member.Name</option>
+                                            }
+                                        </select>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+
+            @if (estimates.SharedIncome is { Count: > 0 } shared)
+            {
+                var unassigned = estimates.UnassignedIncome;
+                <h3 id="shared-income" class="h6 mt-4 mb-1">Income in shared accounts</h3>
+                <p class="small text-body-secondary">
+                    @if (unassigned.Count > 0)
+                    {
+                        <span>@unassigned.Count deposit(s) (@Money.Format(unassigned.Sum(t => t.Transaction.SignedAmount))) aren't counted for anyone yet.</span>
+                    }
+                    Choose whose income each payer's deposits are; a new deposit from the same payer still needs choosing.
+                    @if (_household.Count > 1)
+                    {
+                        <span>Rent from property you own together can be split between co-owners by each person's share above.</span>
+                    }
+                </p>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <tbody>
+                            @foreach (var payer in shared.GroupBy(t => (t.Transaction.AccountId, t.Transaction.Description, t.Transaction.SubCategory)))
+                            {
+                                var items = payer.ToList();
+                                var people = items.Select(t => t.EarnedBy ?? "").Distinct().ToList();
+                                <tr @key="payer.Key">
+                                    <td>
+                                        <div>@payer.Key.Description</div>
+                                        <div class="small text-body-secondary">
+                                            @payer.Key.SubCategory · @(_accounts.FirstOrDefault(a => a.AccountId == payer.Key.AccountId)?.DisplayName) ·
+                                            @items.Count deposit(s), latest @Display.Date(items[0].Transaction.EffectiveDate)
+                                        </div>
+                                    </td>
+                                    <td class="text-end text-nowrap">@Money.Format(items.Sum(t => t.Transaction.SignedAmount))</td>
+                                    <td>
+                                        <select class="form-select form-select-sm w-auto" aria-label="@($"Whose income {payer.Key.Description} is")"
+                                                value="@(people.Count == 1 ? people[0] : "mixed")" @onchange="e => SetEarnedByAsync(items, (string?)e.Value)">
+                                            <option value="">Not assigned</option>
+                                            @if (people.Count > 1)
+                                            {
+                                                <option value="mixed" disabled>Several people</option>
+                                            }
+                                            @foreach (var member in _household)
+                                            {
+                                                <option value="@member.Id">@member.Name</option>
+                                            }
+                                            @if (_household.Count > 1 && payer.Key.SubCategory == Categories.RentalIncome)
+                                            {
+                                                <option value="@TaxSituations.Split">Split between co-owners</option>
+                                            }
+                                        </select>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+    </div>
+</details>
+
+@code {
+    [SupplyParameterFromQuery] public int? Year { get; set; }
+    [SupplyParameterFromQuery] public string? Person { get; set; }
+
+    private int _year;
+    private string? _person;
+    private TaxReport? _report;
+    private TaxEstimateSet? _estimates;
+
+    /// <summary>Whose situation the household section edits: chosen there, else the report's person, else the first.</summary>
+    private string? _situationPersonId;
+
+    private PersonTaxEstimate SituationPerson(TaxEstimateSet set) =>
+        set.People.FirstOrDefault(p => p.PersonId == _situationPersonId)
+        ?? set.People.FirstOrDefault(p => p.PersonId == _person)
+        ?? set.People[0];
+
+    // Decided once per visit, so the section doesn't close while someone is filling it in.
+    private bool _householdOpen;
+    private IReadOnlyList<Account> _accounts = [];
+    private IReadOnlyDictionary<string, string> _holders = new Dictionary<string, string>();
+    private IReadOnlyList<HouseholdMember> _household = [];
+    private string? _error;
+    private decimal? _bulkPercent;
+    private string? _bulkCategory, _bulkMessage, _bulkMessageFor;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _year = Year ?? Periods.DefaultTaxYear;
+        _person = string.IsNullOrEmpty(Person) ? null : Person;
+        _report = null;
+        _estimates = null;
+        await LoadHouseholdAsync();
+        await LoadAsync();
+        _householdOpen = _household.Count > 0 || _estimates?.People.Any(p => p.Situation.Province is null) == true;
+    }
+
+    private void YearChanged(ChangeEventArgs e) => Navigation.NavigateTo($"tax?{Query(int.Parse((string)e.Value!), _person)}");
+
+    private void PersonChanged(ChangeEventArgs e) => Navigation.NavigateTo($"tax?{Query(_year, (string?)e.Value)}");
+
+    private static string Query(int year, string? person) =>
+        string.IsNullOrEmpty(person) ? $"year={year}" : $"year={year}&person={Uri.EscapeDataString(person)}";
+
+    private async Task LoadHouseholdAsync()
+    {
+        try
+        {
+            _household = await Store.GetHouseholdAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load the household: {ex.Message}";
+        }
+    }
+
+    private async Task HouseholdChangedAsync()
+    {
+        await LoadHouseholdAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            // Keep showing the current report while it reloads, so components in it keep their state.
+            _error = null;
+            _report = await Store.GetTaxReportAsync(_year, _person);
+            _estimates = await Store.GetTaxEstimatesAsync(_year);
+            if (_household.Count > 0)
+            {
+                _accounts = await Store.GetAccountsAsync();
+                _holders = await Store.GetAccountHoldersAsync();
+            }
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load the tax report: {ex.Message}";
+        }
+    }
+
+    private async Task SetHolderAsync(string accountId, string? personId)
+    {
+        try
+        {
+            await Store.SetAccountHolderAsync(accountId, string.IsNullOrEmpty(personId) ? null : personId);
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task SetEarnedByAsync(IReadOnlyList<LedgerTransaction> deposits, string? personId)
+    {
+        try
+        {
+            var person = string.IsNullOrEmpty(personId) ? null : personId;
+            foreach (var deposit in deposits.Where(d => d.EarnedBy != person))
+            {
+                await Store.SetEarnedByAsync(deposit.Transaction, person);
+            }
+
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task SetStatusAsync(LedgerTransaction item, TaxTagStatus status)
+    {
+        try
+        {
+            await Store.SetTaxTagAsync(item.Transaction, item.Tax! with { Status = status });
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task SetClaimYearAsync(LedgerTransaction item, int? claimYear)
+    {
+        try
+        {
+            await Store.SetTaxTagAsync(item.Transaction, item.Tax! with { ClaimYear = claimYear });
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task SetBusinessUseAsync(LedgerTransaction item, string? value)
+    {
+        try
+        {
+            decimal? percent = decimal.TryParse(value, System.Globalization.NumberStyles.Number, System.Globalization.CultureInfo.InvariantCulture, out var p) ? p : null;
+            await Store.SetTaxTagAsync(item.Transaction, item.Tax! with { BusinessUsePercent = percent });
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task ApplyBusinessUseAsync(string taxCode)
+    {
+        try
+        {
+            var changed = await Store.SetBusinessUseAsync(_year, new SetBusinessUseRequest(taxCode, _bulkCategory, _bulkPercent), _person);
+            (_bulkMessage, _bulkMessageFor) = ($"Updated {changed} item(s).", taxCode);
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            (_bulkMessage, _bulkMessageFor) = (ex.Message, taxCode);
+        }
+    }
+
+    private async Task SetClaimedByAsync(LedgerTransaction item, string? memberId)
+    {
+        try
+        {
+            await Store.SetTaxTagAsync(item.Transaction, item.Tax! with { ClaimedBy = string.IsNullOrEmpty(memberId) ? null : memberId });
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        try
+        {
+            // A byte-order mark so Excel reads accented descriptions correctly.
+            var csv = "﻿" + await Store.GetTaxReportCsvAsync(_year, _person);
+            await Downloader.DownloadAsync($"looniebooks-tax-{_year}.csv", "text/csv", csv);
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't export the report: {ex.Message}";
+        }
+    }
+}

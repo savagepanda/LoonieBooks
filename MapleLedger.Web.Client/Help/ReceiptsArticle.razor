@@ -1,0 +1,51 @@
+@inject UserSession Session
+
+<div class="help-article">
+    <p class="help-lead">
+        Keep the receipt with the claim. <a href="receipts/scan">Scan receipt</a> photographs a paper receipt, reads its total,
+        date and store, finds the transaction it belongs to and attaches it, so the proof is there when you file.
+    </p>
+
+    <h3>Scanning a receipt</h3>
+    <ol>
+        <li><strong>The receipt.</strong> <span class="help-ui">Use camera</span> on a computer with a webcam or on a phone; lay the receipt flat
+            in good light and fill the frame. Or <span class="help-ui">Send from phone</span> to show a QR code, scan it with your
+            phone's camera and take the photo there. Or choose a photo or PDF you already have.</li>
+        <li><strong>What it says.</strong> As soon as the photo is in, LoonieBooks reads the <span class="help-ui">Total</span>,
+            <span class="help-ui">Date</span> and <span class="help-ui">Store</span> in your browser; the photo isn't sent anywhere to be
+            read. Correct anything it got wrong and the matches update.</li>
+        <li><strong>The transaction it belongs to.</strong> This step appears once there's a photo. LoonieBooks lists the spending that
+            fits the receipt and picks a clear winner for you; choose another if it's wrong. If none fits, use
+            <span class="help-ui">Not one of these? Search your transactions</span> (shown straight away when nothing matches) to look
+            by dates, amount and description. Optionally choose a tax category under <span class="help-ui">Also claim it as</span>,
+            then attach it.</li>
+    </ol>
+    <p class="help-note">
+        Some setups also offer <span class="help-ui">Read with Claude</span> for receipts the browser struggles with. That one
+        <em>does</em> send the photo to Anthropic's API to be read, so it's only used when you press it.
+    </p>
+
+    <h3>Attaching from the tax report</h3>
+    <p>
+        Every claim on the <a href="tax">Tax report</a> has its own attach button: choose a PDF or photo up to 5 MB. Attached
+        receipts are listed under the transaction, where you can download one or remove it with ✕. Confirmed claims without one
+        are counted in the <strong>Missing receipts</strong> tile and marked <em>missing</em> on the printable summary.
+    </p>
+
+    <h3>Where receipts are kept</h3>
+    <p>
+        @if (Session.Storage == StorageLocation.Browser)
+        {
+            @:With your ledger, in this browser. They're part of
+        }
+        else if (Session.IsDesktop)
+        {
+            @:With your ledger, in LoonieBooks' database on the computer running it. They're part of
+        }
+        else
+        {
+            @:With your ledger, in this server's database. They're part of
+        }
+        <a href="data">backups</a>, and they go if the transaction is removed by undoing its import.
+    </p>
+</div>

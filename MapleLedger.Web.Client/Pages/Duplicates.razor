@@ -1,0 +1,185 @@
+@page "/duplicates"
+@inject ILedgerStore Store
+
+<PageTitle>Possible duplicates · LoonieBooks</PageTitle>
+
+<h1 class="h3 mb-2">Possible duplicates</h1>
+<p class="text-body-secondary">
+    Each pair is one account, the same amount, at most @MapleLedger.Core.Import.DuplicateFinder.MaxDaysApart days apart, with
+    descriptions that look alike. That usually means the same transaction was imported twice from
+    different files, such as a PDF statement and a CSV export that print the name differently.
+    Merging deletes one copy and moves its receipts, category and tax choices onto the one you keep.
+</p>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@if (_note is not null)
+{
+    <div class="alert alert-success" role="status">@_note</div>
+}
+
+@if (_pairs is null)
+{
+    <p class="text-body-secondary">Looking for duplicates…</p>
+}
+else if (_pairs.Count == 0)
+{
+    <p>No possible duplicates. <a href="transactions">Back to transactions</a></p>
+}
+else
+{
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <span>@_pairs.Count pair(s) found.</span>
+        @if (_confirmAll)
+        {
+            <span>Merge all @_pairs.Count, keeping the copy marked "Keep" in each?</span>
+            <button class="btn btn-sm btn-danger" @onclick="MergeAllAsync" disabled="@_busy">@(_busy ? "Merging…" : "Merge all")</button>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="() => _confirmAll = false" disabled="@_busy">Cancel</button>
+        }
+        else
+        {
+            <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmAll = true" disabled="@_busy">Merge all…</button>
+        }
+    </div>
+
+    @foreach (var pair in _pairs)
+    {
+        var keep = _keep[pair];
+        <div class="card mb-3" @key="pair">
+            <div class="card-body pb-2">
+                <div class="small text-body-secondary mb-2">
+                    @AccountName(pair.Keep.Transaction.AccountId) ·
+                    @(pair.DaysApart == 0 ? "same day" : $"{pair.DaysApart} day(s) apart")
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-2">
+                        <thead>
+                            <tr><th class="w-auto">Keep</th><th>Date</th><th>Description</th><th>Category</th><th>Tax</th><th class="text-end">Amount</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in new[] { pair.Keep, pair.Remove })
+                            {
+                                var id = item.Transaction.TransactionId;
+                                <tr class="@(keep == id ? "" : "text-body-secondary")">
+                                    <td>
+                                        <input class="form-check-input" type="radio" name="keep-@pair.Keep.Transaction.TransactionId" checked="@(keep == id)"
+                                               @onchange="() => _keep[pair] = id" aria-label="Keep @item.Transaction.Description" disabled="@_busy" />
+                                    </td>
+                                    <td class="text-nowrap">@Display.Date(item.Transaction.EffectiveDate)</td>
+                                    <td>@item.Transaction.Description</td>
+                                    <td>
+                                        @item.Transaction.Category@(item.Transaction.SubCategory is { } sub ? $" · {sub}" : "")
+                                        @if (item.CategoryIsManual)
+                                        {
+                                            <span class="badge text-bg-secondary ms-1">yours</span>
+                                        }
+                                    </td>
+                                    <td>@TaxText(item.Tax)</td>
+                                    <td class="text-end text-nowrap"><AmountText Transaction="item.Transaction" Currency="@_accounts.CurrencyOf(item.Transaction.AccountId)" /></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-sm btn-primary" @onclick="() => MergeAsync(pair)" disabled="@_busy">Merge</button>
+                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => KeepBothAsync(pair)" disabled="@_busy">Not duplicates, keep both</button>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+@code {
+    private List<PossibleDuplicate>? _pairs;
+    private readonly Dictionary<PossibleDuplicate, string> _keep = [];
+    private IReadOnlyList<Account> _accounts = [];
+    private string? _error, _note;
+    private bool _busy, _confirmAll;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _accounts = await Store.GetAccountsAsync();
+            _pairs = [.. await Store.FindDuplicatesAsync()];
+            foreach (var pair in _pairs) _keep[pair] = pair.Keep.Transaction.TransactionId;
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't look for duplicates: {ex.Message}";
+            _pairs = [];
+        }
+    }
+
+    private MergeDuplicateRequest MergeRequest(PossibleDuplicate pair)
+    {
+        var keep = _keep[pair];
+        var remove = keep == pair.Keep.Transaction.TransactionId ? pair.Remove.Transaction.TransactionId : pair.Keep.Transaction.TransactionId;
+        return new MergeDuplicateRequest(keep, remove);
+    }
+
+    private Task MergeAsync(PossibleDuplicate pair) => RunAsync(async () =>
+    {
+        await Store.MergeDuplicateAsync(pair.Keep.Transaction.AccountId, MergeRequest(pair));
+        Resolved(pair);
+        _note = "Merged. The other copy is deleted.";
+    });
+
+    private Task KeepBothAsync(PossibleDuplicate pair) => RunAsync(async () =>
+    {
+        await Store.KeepBothAsync(pair.Keep.Transaction.AccountId, new KeepBothRequest(pair.Keep.Transaction.TransactionId, pair.Remove.Transaction.TransactionId));
+        Resolved(pair);
+        _note = "Kept both. They won't be flagged again.";
+    });
+
+    private Task MergeAllAsync() => RunAsync(async () =>
+    {
+        var merged = 0;
+        foreach (var pair in _pairs!.ToList())
+        {
+            await Store.MergeDuplicateAsync(pair.Keep.Transaction.AccountId, MergeRequest(pair));
+            Resolved(pair);
+            merged++;
+            StateHasChanged();
+        }
+
+        _confirmAll = false;
+        _note = $"Merged {merged} pair(s).";
+    });
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        _busy = true;
+        (_error, _note) = (null, null);
+        try
+        {
+            await action();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Resolved(PossibleDuplicate pair)
+    {
+        _pairs!.Remove(pair);
+        _keep.Remove(pair);
+    }
+
+    private static string TaxText(TaxTag? tax) => tax is null
+        ? ""
+        : tax.Status == TaxTagStatus.Rejected
+            ? "Not claimable"
+            : $"{TaxCategories.Find(tax.Code)?.Name ?? tax.Code}{(tax.Status == TaxTagStatus.Suggested ? " (suggested)" : "")}";
+
+    private string AccountName(string accountId) => _accounts.FirstOrDefault(a => a.AccountId == accountId)?.DisplayName ?? "";
+}

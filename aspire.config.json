@@ -1,0 +1,6 @@
+{
+  "appHost": {
+    "path": "MapleLedger.AppHost/MapleLedger.AppHost.csproj"
+  },
+  "channel": "stable"
+}

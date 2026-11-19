@@ -1,0 +1,133 @@
+﻿@* Grouped columns: income and spending per month. Two series, so a legend is always shown (beside
+   the title, to keep the chart short); each month's band carries a hover tooltip with its numbers.
+   Clicking a month selects it (clicking it again clears it). *@
+
+@* Title row, legend row and plot: as tall as the line charts (MonthLineChart) it switches with. *@
+<div class="viz-root">
+    <div class="viz-head">
+        @if (!string.IsNullOrEmpty(Title))
+        {
+            <h2 class="h6 card-title mb-0">@Title</h2>
+        }
+    </div>
+    <div class="viz-subline viz-legend" aria-hidden="true">
+        <span><span class="viz-swatch viz-income"></span>Income</span>
+        <span><span class="viz-swatch viz-spending"></span>Spending</span>
+    </div>
+
+    <svg class="viz-svg" viewBox="0 0 @Width @Height" role="img" aria-label="Income and spending by month">
+        @foreach (var tick in _ticks)
+        {
+            var y = Y(tick);
+            <line class="viz-grid" x1="@Display.Svg(Left)" x2="@Display.Svg(Width - Right)" y1="@Display.Svg(y)" y2="@Display.Svg(y)" />
+            @Label(Left - 8, y + 4, "end", Money.FormatWhole(tick))
+        }
+
+        @for (var i = 0; i < Months.Count; i++)
+        {
+            var month = Months[i];
+            var bandX = Left + i * Band;
+            var center = bandX + Band / 2;
+            var selected = IsSelected(month);
+            <g class="viz-band @(Selectable ? "viz-link" : "") @(selected ? "is-selected" : "")" role="@(Selectable ? "button" : null)" tabindex="@(Selectable ? "0" : null)"
+               aria-pressed="@(Selectable ? (selected ? "true" : "false") : null)"
+               @onclick="() => Select(month)" @onkeydown="e => SelectOnEnter(e, month)">
+                <title>@Display.Month(month.Year, month.Month): income @Money.Format(month.Income), spending @Money.Format(month.Expenses), net @Money.FormatSigned(month.Net)@(!Selectable ? "" : selected ? ". Show all months again." : ". Show its transactions.")</title>
+                <rect class="viz-hit" x="@Display.Svg(bandX)" y="@Display.Svg(Top)" width="@Display.Svg(Band)" height="@Display.Svg(PlotHeight)" />
+                <path class="viz-income-bar" d="@Column(center - BarWidth - Gap / 2, month.Income)" />
+                <path class="viz-spending-bar" d="@Column(center + Gap / 2, month.Expenses)" />
+            </g>
+            @if (ShowLabel(i))
+            {
+                @Label(center, Height - 8, "middle", MonthLabel(i))
+            }
+        }
+
+        <line class="viz-baseline" x1="@Display.Svg(Left)" x2="@Display.Svg(Width - Right)" y1="@Display.Svg(Top + PlotHeight)" y2="@Display.Svg(Top + PlotHeight)" />
+    </svg>
+</div>
+
+@code {
+    private const double Width = 720, Height = 170, Left = 64, Right = 8, Top = 8, Bottom = 24;
+    private const double PlotHeight = Height - Top - Bottom;
+    private const double Gap = 2, Radius = 4, MaxBarWidth = 24;
+
+    [Parameter, EditorRequired] public IReadOnlyList<MonthlyCashFlow> Months { get; set; } = [];
+
+    /// <summary>The chart's heading, shown on the legend's line.</summary>
+    [Parameter] public string? Title { get; set; }
+
+    /// <summary>The selected month, highlighted.</summary>
+    [Parameter] public MonthlyCashFlow? Selected { get; set; }
+
+    /// <summary>A month was clicked: that month, or null when the selected month was clicked again. Unset leaves the chart unclickable.</summary>
+    [Parameter] public EventCallback<MonthlyCashFlow?> OnSelect { get; set; }
+
+    private bool Selectable => OnSelect.HasDelegate;
+
+    private bool IsSelected(MonthlyCashFlow month) => Selected is { } s && s.Year == month.Year && s.Month == month.Month;
+
+    private Task Select(MonthlyCashFlow month) => Selectable ? OnSelect.InvokeAsync(IsSelected(month) ? null : month) : Task.CompletedTask;
+
+    private Task SelectOnEnter(KeyboardEventArgs e, MonthlyCashFlow month) => e.Key is "Enter" or " " ? Select(month) : Task.CompletedTask;
+
+    private decimal _max;
+    private List<decimal> _ticks = [];
+
+    private double Band => (Width - Left - Right) / Math.Max(1, Months.Count);
+    private double BarWidth => Math.Min(MaxBarWidth, (Band - Gap) * 0.35);
+
+    protected override void OnParametersSet()
+    {
+        var peak = Months.Count == 0 ? 0 : Months.Max(m => Math.Max(m.Income, m.Expenses));
+        var step = NiceStep(peak / 4);
+        _max = step * 4;
+        _ticks = Enumerable.Range(0, 5).Select(i => step * i).ToList();
+    }
+
+    private double Y(decimal value) => Top + PlotHeight - (double)(value / _max) * PlotHeight;
+
+    /// <summary>A column rising from the baseline with a 4px rounded data end and a square base.</summary>
+    private string Column(double x, decimal value)
+    {
+        if (value <= 0) return string.Empty;
+        var top = Y(value);
+        var bottom = Top + PlotHeight;
+        var r = Math.Min(Radius, Math.Min(BarWidth / 2, bottom - top));
+        string S(double v) => Display.Svg(v);
+        return $"M{S(x)},{S(bottom)} L{S(x)},{S(top + r)} Q{S(x)},{S(top)} {S(x + r)},{S(top)} " +
+               $"L{S(x + BarWidth - r)},{S(top)} Q{S(x + BarWidth)},{S(top)} {S(x + BarWidth)},{S(top + r)} L{S(x + BarWidth)},{S(bottom)} Z";
+    }
+
+    /// <summary>
+    /// An SVG axis label. Written as markup because inside a Razor code block a literal
+    /// &lt;text&gt; element is Razor's own text tag.
+    /// </summary>
+    internal static MarkupString Label(double x, double y, string anchor, string text) =>
+        new($"<text class=\"viz-axis\" x=\"{Display.Svg(x)}\" y=\"{Display.Svg(y)}\" text-anchor=\"{anchor}\">{System.Net.WebUtility.HtmlEncode(text)}</text>");
+
+    private bool ShowLabel(int i) => ShowMonthLabel(Months.Count, i);
+
+    /// <summary>Every month's label up to a year of them; past that, every other one.</summary>
+    internal static bool ShowMonthLabel(int count, int i) => count <= 12 || i % 2 == 0;
+
+    private string MonthLabel(int i)
+    {
+        var m = Months[i];
+        var name = Display.Month(m.Year, m.Month);
+        // Show the year only where it changes, so a 12-month axis stays uncluttered.
+        return i == 0 || m.Month == 1 ? name : name[..3];
+    }
+
+    internal static decimal NiceStep(decimal rough)
+    {
+        if (rough <= 0) return 250;
+        var magnitude = (decimal)Math.Pow(10, Math.Floor(Math.Log10((double)rough)));
+        foreach (var m in new[] { 1m, 2m, 2.5m, 5m, 10m })
+        {
+            if (m * magnitude >= rough) return m * magnitude;
+        }
+
+        return 10 * magnitude;
+    }
+}

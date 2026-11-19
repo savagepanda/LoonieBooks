@@ -1,0 +1,174 @@
+@page "/categories"
+@inject CategoryCatalog Catalog
+@inject IJSRuntime JS
+
+<PageTitle>Categories · LoonieBooks</PageTitle>
+
+<h1 class="h3 mb-2">Categories</h1>
+<p class="text-body-secondary">
+    Every transaction has a category and, if you like, a detail (Auto &amp; Transport › Gas). Add your own here or
+    from any category picker. New categories count as spending; for a kind of income, add a detail under Income.
+</p>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+@if (_message is not null)
+{
+    <div class="alert alert-success">@_message</div>
+}
+
+<div class="card mb-3">
+    <div class="card-body">
+        <h2 class="h6 card-title">Add a category</h2>
+        <div class="row g-2 align-items-end">
+            <div class="col-12 col-md-5">
+                <label class="form-label small" for="new-category">New category</label>
+                <div class="input-group input-group-sm">
+                    <input id="new-category" class="form-control" placeholder="e.g. Pets" maxlength="@CustomCategory.MaxNameLength"
+                           @bind="_newCategory" @bind:event="oninput" @onkeydown="e => OnEnterAsync(e, AddCategoryAsync)" disabled="@_busy" />
+                    <button class="btn btn-primary" @onclick="AddCategoryAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newCategory))">Add</button>
+                </div>
+            </div>
+            <div class="col-12 col-md-7">
+                <label class="form-label small" for="new-detail">New detail</label>
+                <div class="input-group input-group-sm">
+                    <select class="form-select" aria-label="Category for the new detail" style="max-width: 14rem" @bind="_detailParent" disabled="@_busy">
+                        @foreach (var node in _tree.Where(n => n.Name != Categories.Uncategorized))
+                        {
+                            <option value="@node.Name">@node.Name</option>
+                        }
+                    </select>
+                    <input id="new-detail" class="form-control" placeholder="e.g. Rental Income" maxlength="@CustomCategory.MaxNameLength"
+                           @bind="_newDetail" @bind:event="oninput" @onkeydown="e => OnEnterAsync(e, AddDetailAsync)" disabled="@_busy" />
+                    <button class="btn btn-primary" @onclick="AddDetailAsync" disabled="@(_busy || string.IsNullOrWhiteSpace(_newDetail))">Add</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (_custom is null)
+{
+    <p class="text-body-secondary">Loading…</p>
+}
+else
+{
+    <div class="card">
+        <ul class="list-group list-group-flush">
+            @foreach (var node in _tree)
+            {
+                var own = OwnTopLevel(node.Name);
+                <li class="list-group-item">
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <span class="fw-semibold">@node.Name</span>
+                        @if (own is not null)
+                        {
+                            <span class="badge text-bg-secondary">Yours</span>
+                            <button class="btn btn-sm btn-link text-danger p-0 ms-auto" @onclick="() => DeleteAsync(own)" disabled="@_busy">Delete</button>
+                        }
+                    </div>
+                    @if (node.SubCategories.Count > 0)
+                    {
+                        <div class="d-flex flex-wrap gap-1 mt-1">
+                            @foreach (var sub in node.SubCategories)
+                            {
+                                var ownDetail = OwnDetail(node.Name, sub);
+                                <span class="badge rounded-pill @(ownDetail is null ? "bg-body-tertiary text-body border" : "text-bg-primary") fw-normal category-detail">
+                                    @sub
+                                    @if (ownDetail is not null)
+                                    {
+                                        <button type="button" class="btn-close btn-close-white ms-1" aria-label="Delete @sub" @onclick="() => DeleteAsync(ownDetail)" disabled="@_busy"></button>
+                                    }
+                                </span>
+                            }
+                        </div>
+                    }
+                </li>
+            }
+        </ul>
+    </div>
+    <p class="small text-body-secondary mt-2">Highlighted details are yours. Built-in categories can't be removed.</p>
+}
+
+@code {
+    private IReadOnlyList<CustomCategory>? _custom;
+    private IReadOnlyList<CategoryNode> _tree = Categories.Tree;
+    private string _newCategory = "", _newDetail = "";
+    private string _detailParent = Categories.All[0];
+    private bool _busy;
+    private string? _error, _message;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _custom = await Catalog.GetCustomAsync();
+            _tree = Categories.WithCustom(_custom);
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load your categories: {ex.Message}";
+            _custom = [];
+        }
+    }
+
+    private CustomCategory? OwnTopLevel(string name) => _custom?.FirstOrDefault(c => c.SubCategory is null && c.Category == name);
+
+    private CustomCategory? OwnDetail(string category, string sub) => _custom?.FirstOrDefault(c => c.Category == category && c.SubCategory == sub);
+
+    private static async Task OnEnterAsync(KeyboardEventArgs e, Func<Task> action)
+    {
+        if (e.Key == "Enter") await action();
+    }
+
+    private Task AddCategoryAsync() => RunAsync(async () =>
+    {
+        if (string.IsNullOrWhiteSpace(_newCategory)) return;
+        var added = await Catalog.AddAsync(new CustomCategoryRequest(_newCategory));
+        (_newCategory, _detailParent, _message) = ("", added.Category, $"Added {added.Category}.");
+    });
+
+    private Task AddDetailAsync() => RunAsync(async () =>
+    {
+        if (string.IsNullOrWhiteSpace(_newDetail)) return;
+        var added = await Catalog.AddAsync(new CustomCategoryRequest(_detailParent, _newDetail));
+        (_newDetail, _message) = ("", $"Added {Categories.Label(added.Category, added.SubCategory)}.");
+    });
+
+    private async Task DeleteAsync(CustomCategory category)
+    {
+        var question = category.SubCategory is { } sub
+            ? $"Delete {category.Category} › {sub}? Transactions filed under it stay in {category.Category}."
+            : $"Delete {category.Category} and its details? Transactions filed under it become Uncategorized.";
+        if (!await JS.InvokeAsync<bool>("confirm", question)) return;
+
+        await RunAsync(async () =>
+        {
+            await Catalog.DeleteAsync(category.Id);
+            _message = $"Deleted {Categories.Label(category.Category, category.SubCategory)}.";
+        });
+    }
+
+    private async Task RunAsync(Func<Task> action)
+    {
+        _busy = true;
+        (_error, _message) = (null, null);
+        try
+        {
+            await action();
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

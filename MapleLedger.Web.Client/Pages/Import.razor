@@ -1,0 +1,1192 @@
+@page "/import"
+@implements IAsyncDisposable
+@using MapleLedger.Core.Categorization
+@using MapleLedger.Core.Import
+@using MapleLedger.Core.Investments
+@using MapleLedger.Core.Receipts
+@inject ILedgerStore Store
+@inject Camera Camera
+@inject ReceiptOcr Ocr
+@inject IJSRuntime JS
+@inject TransactionCategorizer Categorizer
+@inject TaxSuggester TaxSuggester
+@inject TagCatalog TagCatalog
+@inject ILogger<Import> Logger
+@inject NavigationManager Navigation
+
+<PageTitle>Import · LoonieBooks</PageTitle>
+
+<h1 class="h3 mb-1">Import transactions</h1>
+<p class="text-body-secondary">
+    Select the transactions on your bank's website, copy them, and paste them below, choose PDF statements or CSV exports
+    you've downloaded, or take a picture of a statement: from the screen, a camera or your phone. Reading and
+    parsing happen in your browser; only the transactions you import are saved.
+    Importing the same transactions twice is safe: duplicates are skipped.
+</p>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@if (_result is not null)
+{
+    <div class="alert alert-success" role="status">
+        @if (_result.Received > 0 || _balanceNote is null)
+        {
+            <span>Imported @_result.Added transaction(s)@(_result.Duplicates > 0 ? $"; skipped {_result.Duplicates} already imported" : "").</span>
+            <a href="transactions?accountId=@Uri.EscapeDataString(_resultAccountId ?? "")&reviewed=false">Review their categories</a>
+            @if (_imports.FirstOrDefault(i => i.Id == _result.BatchId) is { Remaining: > 0 } latest)
+            {
+                <button class="btn btn-link p-0 ms-2 align-baseline" @onclick="() => AskUndo(latest)">Undo this import</button>
+            }
+        }
+        @if (_balanceNote is not null)
+        {
+            <div>
+                @_balanceNote
+                @if (_staleBalance is not null)
+                {
+                    <button class="btn btn-link p-0 ms-1 align-baseline" @onclick="UseStatementBalanceAsync" disabled="@_importing">Use the statement's balance</button>
+                }
+            </div>
+        }
+    </div>
+    @* Re-checked after every import: a statement imported from a second file shows up here. *@
+    <DuplicatesNotice @key="_result.BatchId" />
+}
+
+@if (_undoing is { } undo)
+{
+    <div class="alert alert-warning" role="alert">
+        Remove the @undo.Remaining transaction(s) this import added to <strong>@AccountName(undo.AccountId)</strong>?
+        Any changes made to them since (categories, tax tags, receipts) are removed with them.
+        <div class="mt-2 d-flex gap-2">
+            <button class="btn btn-sm btn-danger" @onclick="UndoAsync" disabled="@_undoBusy">@(_undoBusy ? "Removing…" : "Remove them")</button>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="() => _undoing = null" disabled="@_undoBusy">Cancel</button>
+        </div>
+    </div>
+}
+else if (_undoNote is not null)
+{
+    <div class="alert alert-info" role="status">@_undoNote</div>
+}
+
+@if (_accounts is null)
+{
+    <p class="text-body-secondary">Loading…</p>
+}
+else if (_importable.Count == 0)
+{
+    @if (_accounts.Count > 0)
+    {
+        <p>Investment accounts don't import transactions: <a href="holdings">import their holdings</a> instead. To import transactions, first <a href="accounts">add the bank or card account</a> they belong to.</p>
+    }
+    else
+    {
+        <p>First <a href="accounts">add the account</a> these transactions belong to.</p>
+    }
+}
+else
+{
+    <div class="row g-3 mb-3">
+        <div class="col-md-4">
+            <label class="form-label" for="account">Account</label>
+            <select id="account" class="form-select" value="@_accountId" @onchange="AccountChanged">
+                @foreach (var a in _importable)
+                {
+                    <option value="@a.AccountId">@a.DisplayName@(a.InstitutionName is null ? "" : $" ({a.InstitutionName})")</option>
+                }
+            </select>
+            @if (_importable.Count < _accounts.Count)
+            {
+                <div class="form-text">Investment accounts aren't listed: <a href="holdings">import their holdings</a>.</div>
+            }
+        </div>
+        <div class="col-md-4">
+            <label class="form-label" for="order">Numeric dates like 03/04/2026 are</label>
+            <select id="order" class="form-select" value="@_dateOrder" @onchange="DateOrderChanged">
+                <option value="@DateOrder.Auto">Detect automatically</option>
+                <option value="@DateOrder.MonthDayYear">Month/Day/Year</option>
+                <option value="@DateOrder.DayMonthYear">Day/Month/Year</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="mb-3">
+        <div class="form-label">Statement files (PDF or CSV)</div>
+        @* The file input covers the whole zone, so a drop anywhere on it lands in the input. *@
+        <label class="file-drop @(_draggingFiles ? "file-drop-active" : "") @(_readingFiles ? "file-drop-disabled" : "")"
+               @ondragenter="() => _draggingFiles = true" @ondragleave="() => _draggingFiles = false" @ondrop="() => _draggingFiles = false">
+            <InputFile id="statement-files" accept=".pdf,application/pdf,.csv,text/csv" multiple OnChange="FilesChosenAsync" disabled="@_readingFiles" />
+            <svg class="file-drop-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span><b>Drag statement files here</b>, or <span class="file-drop-browse">browse</span></span>
+            <span class="small text-body-secondary">PDF statements or CSV exports, up to @MaxFiles at once</span>
+        </label>
+        <div class="form-text">
+            Drop or choose one or more PDF statements or CSV exports for this account (e.g. every month of the year). The text
+            is read in your browser and put in the box below, where you can check or edit it. Scanned PDF statements
+            (images) can't be read; use pictures instead.
+        </div>
+        @if (_readingFiles)
+        {
+            <p class="small text-body-secondary mt-2 mb-0" role="status">Reading…</p>
+        }
+        else if (_fileNote is not null)
+        {
+            <p class="small mt-2 mb-0" role="status">@_fileNote</p>
+        }
+    </div>
+
+    <div class="mb-3">
+        <div class="form-label" id="pictures-label">Pictures of a statement</div>
+        <div class="statement-camera mb-2 @(_cameraOn ? "" : "d-none")">
+            <video @ref="_video" playsinline muted aria-label="Camera preview"></video>
+            <div class="small text-body-secondary mt-1">@_resolution · Fill the frame with one page, flat and well lit.</div>
+        </div>
+        <div class="d-flex flex-wrap gap-2" role="group" aria-labelledby="pictures-label">
+            @if (_cameraOn)
+            {
+                <button class="btn btn-primary" @onclick="CaptureCameraAsync" disabled="@PictureBusy">Take photo</button>
+                <button class="btn btn-outline-secondary" @onclick="StopCameraAsync">Stop camera</button>
+            }
+            else
+            {
+                <button class="btn btn-outline-primary" @onclick="CaptureScreenAsync" disabled="@PictureBusy">Capture screen</button>
+                <button class="btn btn-outline-primary" @onclick="StartCameraAsync" disabled="@PictureBusy">Use camera</button>
+                @if (SiteInfo.HasWebHost)
+                {
+                    <button class="btn btn-outline-primary" @onclick="StartPhoneAsync" disabled="@(PictureBusy || _phone?.IsWaiting == true)">Send from phone</button>
+                }
+                <label class="btn btn-outline-primary mb-0 @(PictureBusy ? "disabled" : "")">
+                    Choose pictures
+                    <InputFile class="d-none" accept="image/png,image/jpeg,image/webp" multiple OnChange="PicturesChosenAsync" />
+                </label>
+            }
+        </div>
+        <PhoneRelayPanel @ref="_phone" OnReceived="PictureFromPhoneAsync" OnError="ShowError" OnCancelled="StateHasChanged" />
+        <div class="form-text">
+            For <b>Capture screen</b>, open your bank's transactions first, then choose that window or tab. You can also
+            paste a screenshot here (Windows key + Shift + S, then Ctrl+V). Add a picture for each page or screenful;
+            they're read together. Text is read in your browser and put in the box below. Reading pictures can mistake
+            a character, so check the amounts against your statement before importing.
+        </div>
+        @if (_pictureProgress is not null)
+        {
+            <div class="small text-body-secondary mt-2" role="status">@_pictureProgress</div>
+            <div class="progress mt-1" role="progressbar" aria-label="Reading the picture" aria-valuenow="@((int)(_pictureValue * 100))" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: @(((int)(_pictureValue * 100)).ToString(System.Globalization.CultureInfo.InvariantCulture))%"></div>
+            </div>
+        }
+        else if (_pictureNote is not null)
+        {
+            <p class="small mt-2 mb-0" role="status">
+                @_pictureNote
+                @if (_pictures.Count > 0)
+                {
+                    <button class="btn btn-sm btn-link p-0 ms-1 align-baseline" @onclick="ClearPictures">Start over</button>
+                }
+            </p>
+        }
+    </div>
+
+    <label class="form-label" for="paste">Pasted text</label>
+    <textarea id="paste" class="form-control font-monospace paste-box" rows="10" spellcheck="false"
+              placeholder="Paste the transaction table from your bank here (Ctrl+V)"
+              @bind="_text" @bind:event="oninput" @bind:after="TextChanged"></textarea>
+
+    @if (_parse is { Layout: not PasteLayout.Empty } parse)
+    {
+        <p class="mt-2 small text-body-secondary">
+            Read as @LayoutName(parse.Layout)@(parse.Header is null ? "" : " with a header row") ·
+            @parse.Transactions.Count transaction(s) found@(parse.Issues.Count > 0 ? $" · {parse.Issues.Count} note(s)" : "")
+        </p>
+
+        @if (!parse.RolesAreImplied && parse.Rows.Count > 0)
+        {
+            <h2 class="h6 mt-3">Columns</h2>
+            <p class="small text-body-secondary mb-2">Check what each column holds. Change a column if it was detected wrongly.</p>
+            <div class="table-responsive">
+                <table class="table table-sm table-bordered column-map">
+                    <thead>
+                        <tr>
+                            @for (var c = 0; c < parse.ColumnRoles.Count; c++)
+                            {
+                                var column = c;
+                                <th>
+                                    <select class="form-select form-select-sm" aria-label="Column @(column + 1)" value="@parse.ColumnRoles[column]" @onchange="e => RoleChanged(column, e)">
+                                        @foreach (var role in Enum.GetValues<ColumnRole>())
+                                        {
+                                            <option value="@role">@RoleName(role)</option>
+                                        }
+                                    </select>
+                                    @if (parse.Header is not null && column < parse.Header.Count)
+                                    {
+                                        <div class="small fw-normal text-body-secondary mt-1">@parse.Header[column]</div>
+                                    }
+                                </th>
+                            }
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var row in parse.Rows.Take(3))
+                        {
+                            <tr>
+                                @foreach (var cell in row)
+                                {
+                                    <td class="small text-truncate column-sample">@cell</td>
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+
+        @if (parse.Issues.Count > 0)
+        {
+            <details class="mb-3">
+                <summary class="small">@parse.Issues.Count note(s) about the pasted text</summary>
+                <ul class="small mt-2">
+                    @foreach (var issue in parse.Issues)
+                    {
+                        <li>@(issue.SourceLine > 0 ? $"Line {issue.SourceLine}: " : "")@issue.Message</li>
+                    }
+                </ul>
+            </details>
+        }
+
+        @if (_preview.Count > 0)
+        {
+            <h2 class="h6 mt-3">Preview</h2>
+            @if (RememberedCount > 0)
+            {
+                <p class="small text-body-secondary mb-2">
+                    @RememberedCount transaction(s) take the category or tags you gave the same merchant before (marked
+                    <span class="badge text-bg-light border fw-normal">remembered</span>). Imported categories stay marked
+                    as needing review until you confirm or change them in Transactions.
+                </p>
+            }
+            <div class="table-responsive">
+                <table class="table table-sm align-middle">
+                    <thead>
+                        <tr>
+                            <th><input class="form-check-input" type="checkbox" aria-label="Include all" checked="@(_excluded.Count == 0)" @onchange="ToggleAll" /></th>
+                            <th>Date</th><th>Description</th><th>Category</th><th>Tax</th><th class="text-end">Amount</th><th class="text-end">Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in _preview)
+                        {
+                            var id = item.Transaction.TransactionId;
+                            <tr class="@(_excluded.Contains(id) ? "text-body-tertiary" : "")">
+                                <td><input class="form-check-input" type="checkbox" aria-label="Include" checked="@(!_excluded.Contains(id))" @onchange="() => Toggle(id)" /></td>
+                                <td class="text-nowrap">@Display.Date(item.Transaction.EffectiveDate)</td>
+                                <td>@item.Transaction.Description</td>
+                                <td class="small">
+                                    @Categories.Label(item.Transaction.Category, item.Transaction.SubCategory)
+                                    @if (Remembered(item))
+                                    {
+                                        <span class="badge text-bg-light border fw-normal ms-1" title="Chosen for this merchant before">remembered</span>
+                                    }
+                                    @if (item.Tags is { Count: > 0 } tags)
+                                    {
+                                        <div class="text-body-secondary">@string.Join(", ", tags.Select(TagName).Where(n => n.Length > 0))</div>
+                                    }
+                                </td>
+                                <td class="small">@(TaxCategories.Find(item.Tax?.Code)?.Name)</td>
+                                <td class="text-end text-nowrap"><AmountText Transaction="item.Transaction" Currency="@_accounts.CurrencyOf(item.Transaction.AccountId)" /></td>
+                                <td class="text-end text-nowrap small text-body-secondary">@(item.Transaction.RunningBalance is { } b ? Money.Format(b, _accounts.CurrencyOf(item.Transaction.AccountId)) : "")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
+
+    @if (Loan is { } loan)
+    {
+        <div class="card mb-3">
+            <div class="card-body">
+                <h2 class="h6">Loan statement as of @Display.Date(loan.AsOf)</h2>
+                <p class="small text-body-secondary mb-2">
+                    What's owed, as the statement gives it. Untick a part that's tracked in another account (e.g. a
+                    FlexLine's term portion kept as its own mortgage account).
+                </p>
+                <table class="table table-sm align-middle mb-2 loan-parts">
+                    <tbody>
+                        @for (var i = 0; i < loan.BalanceParts.Count; i++)
+                        {
+                            var index = i;
+                            var part = loan.BalanceParts[index];
+                            <tr class="@(_loanSkipped.Contains(index) ? "text-body-tertiary" : "")">
+                                <td class="loan-part-check">
+                                    <input id="loan-part-@index" class="form-check-input" type="checkbox" checked="@(!_loanSkipped.Contains(index))" @onchange="() => ToggleLoanPart(index)" />
+                                </td>
+                                <td><label for="loan-part-@index">@part.Label</label></td>
+                                <td class="text-end text-nowrap">@Money.Format(part.Amount)</td>
+                            </tr>
+                        }
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <td></td>
+                            <th>Amount owed</th>
+                            <th class="text-end text-nowrap">@Money.Format(LoanBalance)</th>
+                        </tr>
+                    </tfoot>
+                </table>
+                <ul class="small text-body-secondary mb-0 ps-3">
+                    @foreach (var portion in loan.Portions.Where(p => p.InterestCharged is > 0 || p.InterestPaid is > 0 || p.DeferredInterest is > 0))
+                    {
+                        <li>@LoanPortionNote(loan, portion)</li>
+                    }
+                    @if (loan.Portions.All(p => p.DeferredInterest is null))
+                    {
+                        <li>No deferred interest is shown on this statement.</li>
+                    }
+                    @if (loan.BalanceParts.Any(p => p.Amount < 0))
+                    {
+                        <li>A negative balance is a credit in your favour; it lowers the amount owed.</li>
+                    }
+                </ul>
+            </div>
+        </div>
+    }
+
+    @if (_preview.Count > 0 || Loan is not null)
+    {
+        <div class="card">
+            <div class="card-body d-flex flex-wrap align-items-center gap-3">
+                <div>
+                    <strong>@Included.Count()</strong> to import ·
+                    in @Money.Format(Included.Where(i => i.Transaction.DebitCreditMemo == DebitCreditMemo.Credit).Sum(i => i.Transaction.Amount), ImportCurrency) ·
+                    out @Money.Format(Included.Where(i => i.Transaction.DebitCreditMemo == DebitCreditMemo.Debit).Sum(i => i.Transaction.Amount), ImportCurrency)
+                </div>
+                @if (StatementBalance is { } ending)
+                {
+                    <div class="form-check mb-0">
+                        <input id="balance" class="form-check-input" type="checkbox" @bind="_updateBalance" />
+                        <label class="form-check-label" for="balance">Set account balance to @Money.Format(ending.Balance, ImportCurrency) as of @Display.Date(ending.AsOf)</label>
+                    </div>
+                }
+                <button class="btn btn-primary ms-auto" @onclick="ImportAsync" disabled="@(_importing || !(Included.Any() || (Loan is not null && _updateBalance)))">
+                    @(_importing ? "Importing…" : Included.Any() ? $"Import {Included.Count()} transaction(s)" : "Set balance")
+                </button>
+            </div>
+        </div>
+    }
+
+    @if (_imports.Count > 0)
+    {
+        <h2 class="h6 mt-4">Recent imports into this account</h2>
+        <p class="small text-body-secondary mb-2">
+            Imported into the wrong account, or the wrong file? Undo removes the transactions that import added.
+            Ones it skipped as already imported stay. The account balance isn't changed back.
+        </p>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle">
+                <thead>
+                    <tr><th>Imported</th><th>From</th><th class="text-end">Added</th><th class="text-end">Still here</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var import in _imports)
+                    {
+                        <tr>
+                            <td class="text-nowrap">@ImportedAt(import)</td>
+                            <td>@SourceName(import.Source)</td>
+                            <td class="text-end">@import.Added</td>
+                            <td class="text-end">@import.Remaining</td>
+                            <td class="text-end">
+                                <button class="btn btn-sm btn-outline-danger" @onclick="() => AskUndo(import)" disabled="@(import.Remaining == 0 || _undoBusy)"
+                                        aria-label="Undo the import of @ImportedAt(import)">Undo</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "accountId")] public string? RequestedAccountId { get; set; }
+
+    private IReadOnlyList<Account>? _accounts;
+
+    /// <summary>The accounts transactions are imported into: not investment accounts, which import holdings.</summary>
+    private List<Account> _importable = [];
+    private string? _accountId;
+    private string _text = "";
+    private DateOrder _dateOrder = DateOrder.Auto;
+    private bool _updateBalance = true;
+    private IReadOnlyList<ColumnRole>? _manualRoles;
+    private PasteParseResult? _parse;
+    private IReadOnlyList<LedgerTransaction> _preview = [];
+
+    // The user's earlier choices per merchant, applied to the preview; and the tag names to show.
+    private MerchantMemory _memory = MerchantMemory.Empty;
+    private IReadOnlyList<LedgerTag> _tags = [];
+    private HashSet<string> _excluded = [];
+    private ImportTransactionsResult? _result;
+    private string? _balanceNote;
+
+    // A statement balance the import didn't apply, because the account's balance is from a later date.
+    private (string AccountId, decimal Balance, DateOnly AsOf)? _staleBalance;
+
+    // A mortgage or home equity line statement read from PDFs: the latest one's balance, and the
+    // text of every statement's activity, put in the box. Edited text is no longer the statement's.
+    private LoanStatement? _loan;
+    private string? _loanText;
+    private HashSet<int> _loanSkipped = [];
+    private string? _error;
+    private bool _importing;
+    private string? _resultAccountId;
+    private string _source = "paste";
+
+    // Past imports into the selected account, and the one waiting for "Remove them".
+    private IReadOnlyList<ImportSummary> _imports = [];
+    private ImportSummary? _undoing;
+    private bool _undoBusy;
+    private string? _undoNote;
+    private bool _readingFiles;
+    private bool _draggingFiles;
+    private string? _fileNote;
+
+    // Pictures of a statement: each one's words, read by OCR, rebuilt into one table together.
+    private readonly List<StatementWords> _pictures = [];
+    private readonly SemaphoreSlim _pictureGate = new(1, 1);
+    private ElementReference _video;
+    private PhoneRelayPanel? _phone;
+    private DotNetObjectReference<Import>? _self;
+    private IJSObjectReference? _pasteModule;
+    private int? _pasteListener;
+    private bool _cameraOn;
+    private int _picturesPending;
+    private string? _resolution, _pictureProgress, _pictureNote;
+    private double _pictureValue;
+
+    private bool PictureBusy => _picturesPending > 0 || _readingFiles;
+
+    private Account? SelectedAccount => _accounts?.FirstOrDefault(a => a.AccountId == _accountId);
+
+    private string ImportCurrency => SelectedAccount is { } account ? CurrencyRates.CurrencyOf(account) : Money.Cad;
+    private IEnumerable<LedgerTransaction> Included => _preview.Where(p => !_excluded.Contains(p.Transaction.TransactionId));
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _accounts = await Store.GetAccountsAsync();
+            if (_accounts.FirstOrDefault(a => a.AccountId == RequestedAccountId) is { AccountCategory: AccountCategory.InvestmentAccount } investment)
+            {
+                Navigation.NavigateTo($"holdings?accountId={Uri.EscapeDataString(investment.AccountId)}", replace: true);
+                return;
+            }
+
+            _importable = _accounts.Where(a => a.AccountCategory != AccountCategory.InvestmentAccount).ToList();
+            _accountId = _importable.FirstOrDefault(a => a.AccountId == RequestedAccountId)?.AccountId ?? _importable.FirstOrDefault()?.AccountId;
+            await LoadImportsAsync();
+            await LoadMemoryAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load accounts: {ex.Message}";
+        }
+    }
+
+    private async Task LoadMemoryAsync()
+    {
+        try
+        {
+            _memory = new MerchantMemory(await Store.GetMerchantChoicesAsync());
+            _tags = await TagCatalog.GetOrEmptyAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            // The built-in rules still categorize; only the user's earlier choices are missing.
+            _memory = MerchantMemory.Empty;
+        }
+    }
+
+    private bool Remembered(LedgerTransaction item) =>
+        item.Tags is { Count: > 0 }
+        || _memory.Recall(item.Transaction.AccountId, item.Transaction.Description, item.Transaction.DebitCreditMemo).Category is not null;
+
+    private int RememberedCount => _memory.IsEmpty ? 0 : _preview.Count(Remembered);
+
+    private string TagName(string id) => _tags.FirstOrDefault(t => t.Id == id)?.Name ?? "";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            // Ctrl+V of a screenshot anywhere on the page reads it like a chosen picture.
+            _self = DotNetObjectReference.Create(this);
+            _pasteModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/paste.js");
+            _pasteListener = await _pasteModule.InvokeAsync<int>("listen", _self);
+        }
+        catch (JSException)
+        {
+            // Pasting pictures just won't work; the buttons still do.
+        }
+    }
+
+    private void Reparse()
+    {
+        _result = null;
+        if (SelectedAccount is not { } account || string.IsNullOrWhiteSpace(_text))
+        {
+            _parse = null;
+            _preview = [];
+            return;
+        }
+
+        _parse = PasteParser.Parse(_text, new PasteParseOptions
+        {
+            DateOrder = _dateOrder,
+            IsLiabilityAccount = account.IsLiability,
+            ColumnRoles = _manualRoles,
+        });
+        _preview = LedgerTransactionFactory.Create(account.AccountId, _parse.Transactions, Categorizer, TaxSuggester, _memory);
+        if (Loan is not null)
+        {
+            _preview = [.. _preview.Select(p => Remembered(p) ? p : p with { Transaction = LoanCategory(p.Transaction) })];
+        }
+
+        _excluded.IntersectWith(_preview.Select(p => p.Transaction.TransactionId));
+    }
+
+    /// <summary>
+    /// A payment to a loan is money moved from another account (its other side, in chequing, is the
+    /// spending), and so is an advance; interest the lender adds is a charge.
+    /// </summary>
+    private static Transaction LoanCategory(Transaction t) =>
+        t.DebitCreditMemo == DebitCreditMemo.Debit && t.Description?.Contains("interest", StringComparison.OrdinalIgnoreCase) == true
+            ? t with { Category = Categories.FeesAndCharges, SubCategory = "Interest Charged" }
+            : t with { Category = Categories.Transfer, SubCategory = "Account Transfer" };
+
+    /// <summary>The loan statement read from the chosen PDFs, while the box still holds its text.</summary>
+    private LoanStatement? Loan => _loan is not null && _text == _loanText ? _loan : null;
+
+    private decimal LoanBalance => Loan is { } loan ? loan.BalanceParts.Where((_, i) => !_loanSkipped.Contains(i)).Sum(p => p.Amount) : 0;
+
+    private void ToggleLoanPart(int index)
+    {
+        if (!_loanSkipped.Remove(index)) _loanSkipped.Add(index);
+    }
+
+    /// <summary>The balance the import can set: a loan statement's amount owed, or the last balance in the table.</summary>
+    private (decimal Balance, DateOnly AsOf)? StatementBalance =>
+        Loan is { } loan ? (LoanBalance, loan.AsOf)
+        : _parse?.MostRecentWithBalance is { Balance: { } ending } latest ? (EndingBalance(ending), latest.Date)
+        : null;
+
+    private static string LoanPortionNote(LoanStatement loan, LoanPortion portion)
+    {
+        var name = loan.Portions.Count > 1 ? Capitalize(portion.Name) + ": " : "";
+        var facts = new List<string>();
+        if (portion.InterestCharged is > 0 and { } charged) facts.Add($"interest for the period {Money.Format(charged)}");
+        if (portion.InterestPaid is > 0 and { } paid) facts.Add($"interest paid {Money.Format(paid)}");
+        if (portion.DeferredInterest is > 0 and { } deferred) facts.Add($"deferred interest owing {Money.Format(deferred)}, not included in the principal balance");
+        return name + string.Join(" · ", facts);
+    }
+
+    private static string Capitalize(string text) => text.Length == 0 ? text : char.ToUpperInvariant(text[0]) + text[1..];
+
+    /// <summary>
+    /// The statements' activity as a table for the box: payments as money in, since they lower
+    /// what's owed, and each payment's principal and interest in its description.
+    /// </summary>
+    private static string LoanActivityText(IEnumerable<LoanStatement> statements)
+    {
+        var text = new System.Text.StringBuilder("Date\tDescription\tMoney out\tMoney in\n");
+        foreach (var statement in statements.OrderBy(s => s.AsOf))
+        {
+            foreach (var portion in statement.Portions)
+            {
+                foreach (var a in portion.Activity)
+                {
+                    var description = (statement.Portions.Count > 1 ? Capitalize(portion.Name) + ": " : "") + a.Description;
+                    if (a is { Principal: { } principal, Interest: { } interest })
+                    {
+                        description += $" (principal {Amount(principal)}, interest {Amount(interest)})";
+                    }
+
+                    var amount = Amount(a.Amount);
+                    var (moneyOut, moneyIn) = a.Kind == LoanActivityKind.Payment ? ("", amount) : (amount, "");
+                    text.Append(a.Date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture))
+                        .Append('\t').Append(description.Replace('\t', ' '))
+                        .Append('\t').Append(moneyOut).Append('\t').Append(moneyIn).Append('\n');
+                }
+            }
+        }
+
+        return text.ToString();
+    }
+
+    private static string Amount(decimal value) => value.ToString("#,##0.00", System.Globalization.CultureInfo.InvariantCulture);
+
+    private void TextChanged()
+    {
+        // Column choices describe the previous paste; a new paste gets detected afresh.
+        _manualRoles = null;
+        Reparse();
+    }
+
+    private const long MaxFileBytes = 25 * 1024 * 1024;
+    private const int MaxFiles = 24;
+
+    private async Task FilesChosenAsync(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        _fileNote = null;
+        (_loan, _loanText) = (null, null);
+        _readingFiles = true;
+        try
+        {
+            var chosen = e.GetMultipleFiles(MaxFiles).OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            var kinds = chosen.Select(f => KindOf(f.Name)).Distinct().ToList();
+            if (chosen.FirstOrDefault(f => KindOf(f.Name) == StatementFileKind.Other) is { } unknown)
+            {
+                _error = $"{unknown.Name} isn't a PDF or CSV file.";
+                return;
+            }
+
+            if (kinds.Count > 1)
+            {
+                _error = "Choose PDF statements or CSV files, not both at once.";
+                return;
+            }
+
+            var files = new List<StatementFile>();
+            foreach (var file in chosen)
+            {
+                if (file.Size > MaxFileBytes)
+                {
+                    _error = $"{file.Name} is larger than 25 MB.";
+                    return;
+                }
+
+                using var buffer = new MemoryStream();
+                await using (var stream = file.OpenReadStream(MaxFileBytes))
+                {
+                    await stream.CopyToAsync(buffer);
+                }
+
+                files.Add(new StatementFile(file.Name, buffer.ToArray()));
+            }
+
+            var source = files.Count == 1 ? files[0].Name : $"{files.Count} files";
+            if (files.Count == 0) return;
+            if (kinds[0] == StatementFileKind.Csv)
+            {
+                var csv = CsvStatementReader.Read(files);
+                _fileNote = $"Read {source} and found {csv.RowCount} dated row(s). Check them below before importing.";
+                _pictures.Clear();
+                _pictureNote = null;
+                _text = csv.Text;
+                _source = "CSV";
+                TextChanged();
+                return;
+            }
+
+            // Reading runs on the browser's only thread; let "Reading…" render first.
+            StateHasChanged();
+            await Task.Delay(1);
+
+            // Mortgage and home equity line statements give what's owed as labelled figures, not a table.
+            var loans = files.Select(f => LoanStatementReader.Read(f)).ToList();
+            if (loans.All(l => l is not null))
+            {
+                var statements = loans.Select(l => l!).ToList();
+                _loan = statements.MaxBy(s => s.AsOf);
+                _loanSkipped = [];
+                _loanText = LoanActivityText(statements);
+                var count = statements.Sum(s => s.Activity.Count);
+                _fileNote = $"Read {source} as a loan statement: amount owed {Money.Format(_loan!.Balance)} as of {Display.Date(_loan.AsOf)}"
+                    + (count > 0 ? $", and {count} payment or charge row(s). Check them below before importing." : ", and no payments. Set the balance below.");
+                _pictures.Clear();
+                _pictureNote = null;
+                _text = _loanText;
+                _source = "PDF";
+                TextChanged();
+                return;
+            }
+
+            var result = PdfStatementReader.Read(files);
+
+            switch (result.Layout)
+            {
+                case PdfTextLayout.NoText:
+                    _error = $"No text found in {source}. It looks like a scanned image, which can't be read.";
+                    return;
+                case PdfTextLayout.Table:
+                    _fileNote = $"Read {result.PageCount} page(s) from {source} and found {result.RowCount} transaction row(s). Check them below before importing.";
+                    break;
+                default:
+                    _fileNote = $"Read {result.PageCount} page(s) from {source}, but didn't recognise a transaction table. Its text is below; check how it was read.";
+                    break;
+            }
+
+            _pictures.Clear();
+            _pictureNote = null;
+            _text = result.Text;
+            _source = "PDF";
+            TextChanged();
+        }
+        catch (Exception ex) when (ex is PdfStatementException or CsvStatementException)
+        {
+            _error = ex.Message;
+            // The message is for the user; the cause (e.g. PdfPig's own exception) goes to the browser console.
+            if (ex.InnerException is { } cause) Logger.LogWarning(cause, "Couldn't read a statement file: {Message}", ex.Message);
+        }
+        catch (IOException ex)
+        {
+            _error = $"Couldn't read the file: {ex.Message}";
+        }
+        finally
+        {
+            _readingFiles = false;
+        }
+    }
+
+    private enum StatementFileKind { Pdf, Csv, Other }
+
+    // By extension: browsers report CSV as text/csv, application/vnd.ms-excel or nothing, depending on the OS.
+    private static StatementFileKind KindOf(string name) => Path.GetExtension(name).ToLowerInvariant() switch
+    {
+        ".pdf" => StatementFileKind.Pdf,
+        ".csv" => StatementFileKind.Csv,
+        _ => StatementFileKind.Other,
+    };
+
+    // ---------------------------------------------------------------- pictures of a statement
+
+    private async Task CaptureScreenAsync()
+    {
+        _error = null;
+        await StopPhoneAsync();
+        try
+        {
+            var png = await Camera.CaptureScreenAsync();
+            await AddPictureAsync(png, "image/png", $"screen-{Stamp()}.png");
+        }
+        catch (CameraException ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task StartCameraAsync()
+    {
+        _error = null;
+        await StopPhoneAsync();
+        _cameraOn = true; // the <video> must be visible before the stream attaches
+        StateHasChanged();
+        try
+        {
+            _resolution = await Camera.StartAsync(_video);
+        }
+        catch (CameraException ex)
+        {
+            _cameraOn = false;
+            _error = ex.Message;
+        }
+    }
+
+    private async Task StopCameraAsync()
+    {
+        await Camera.StopAsync();
+        _cameraOn = false;
+    }
+
+    private async Task CaptureCameraAsync()
+    {
+        _error = null;
+        try
+        {
+            var jpeg = await Camera.CaptureAsync(_video);
+            // The camera stays on for the next page.
+            await AddPictureAsync(jpeg, "image/jpeg", $"photo-{Stamp()}.jpg");
+        }
+        catch (CameraException ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task StartPhoneAsync()
+    {
+        _error = null;
+        if (_cameraOn) await StopCameraAsync();
+        await _phone!.StartAsync();
+    }
+
+    private async Task StopPhoneAsync()
+    {
+        if (_phone is not null) await _phone.StopAsync();
+    }
+
+    private async Task PictureFromPhoneAsync(RelayedReceipt file)
+    {
+        if (!ReceiptOcr.CanRead(file.ContentType))
+        {
+            _error = "That isn't a picture LoonieBooks can read. Send a photo (JPEG or PNG); for a PDF statement, choose it above.";
+            return;
+        }
+
+        await AddPictureAsync(file.Content, file.ContentType, file.FileName);
+    }
+
+    private const long MaxPictureBytes = 40 * 1024 * 1024;
+
+    private async Task PicturesChosenAsync(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        foreach (var file in e.GetMultipleFiles(MaxFiles).OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!ReceiptOcr.CanRead(file.ContentType))
+            {
+                _error = $"{file.Name} isn't a picture LoonieBooks can read. Choose PNG or JPEG pictures.";
+                return;
+            }
+
+            if (file.Size > MaxPictureBytes)
+            {
+                _error = $"{file.Name} is larger than 40 MB.";
+                return;
+            }
+
+            byte[] bytes;
+            try
+            {
+                using var buffer = new MemoryStream();
+                await using (var stream = file.OpenReadStream(MaxPictureBytes))
+                {
+                    await stream.CopyToAsync(buffer);
+                }
+
+                bytes = buffer.ToArray();
+            }
+            catch (IOException ex)
+            {
+                _error = $"Couldn't read {file.Name}: {ex.Message}";
+                return;
+            }
+
+            await AddPictureAsync(bytes, file.ContentType, file.Name);
+        }
+    }
+
+    /// <summary>Called by paste.js when a picture is pasted onto the page.</summary>
+    [JSInvokable]
+    public Task OnImagePasted(byte[] bytes, string contentType) => InvokeAsync(async () =>
+    {
+        if (_importable.Count == 0) return;
+        _error = null;
+        if (ReceiptOcr.CanRead(contentType))
+        {
+            await AddPictureAsync(bytes, contentType, $"pasted-{Stamp()}.png");
+        }
+        else
+        {
+            _error = "That pasted picture is in a format LoonieBooks can't read.";
+            StateHasChanged();
+        }
+    });
+
+    /// <summary>Reads one picture, then rebuilds the table from every picture so far. One picture is read at a time, in order.</summary>
+    private async Task AddPictureAsync(byte[] bytes, string contentType, string name)
+    {
+        _picturesPending++;
+        _pictureProgress = $"Waiting to read {name}…";
+        StateHasChanged();
+        await _pictureGate.WaitAsync();
+        try
+        {
+            _pictureValue = 0;
+            _pictureProgress = "Loading the text reader (the first time takes a moment)…";
+            var words = await Ocr.ReadStatementAsync(bytes, contentType, (status, value) =>
+            {
+                if (status == "recognizing text") _pictureProgress = $"Reading {name}…";
+                _pictureValue = value;
+                _ = InvokeAsync(StateHasChanged);
+            });
+
+            _pictures.Add(new StatementWords(name, [words]));
+            ReadPictures();
+        }
+        catch (CameraException ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _pictureGate.Release();
+            if (--_picturesPending == 0) _pictureProgress = null;
+            StateHasChanged();
+        }
+    }
+
+    private void ReadPictures()
+    {
+        var result = PdfStatementReader.ReadWords(_pictures);
+        var source = _pictures.Count == 1 ? "the picture" : $"{_pictures.Count} pictures";
+        switch (result.Layout)
+        {
+            case PdfTextLayout.NoText:
+                _pictures.RemoveAt(_pictures.Count - 1);
+                _error = "No text found in that picture. Try a sharper, closer one.";
+                return;
+            case PdfTextLayout.Table:
+                _pictureNote = $"Read {source} and found {result.RowCount} transaction row(s). Check them below before importing.";
+                break;
+            default:
+                _pictureNote = $"Read {source}, but didn't recognise a transaction table. Its text is below; check how it was read.";
+                break;
+        }
+
+        _text = result.Text;
+        _source = "Pictures";
+        TextChanged();
+    }
+
+    private void ClearPictures()
+    {
+        _pictures.Clear();
+        _pictureNote = null;
+        _text = "";
+        _source = "paste";
+        TextChanged();
+    }
+
+    private void ShowError(string message) => _error = message;
+
+    private static string Stamp() => DateTime.Now.ToString("yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture);
+
+    public async ValueTask DisposeAsync()
+    {
+        await Camera.StopAsync();
+        if (_pasteModule is not null)
+        {
+            try
+            {
+                if (_pasteListener is { } id) await _pasteModule.InvokeVoidAsync("stop", id);
+                await _pasteModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+
+        _self?.Dispose();
+    }
+
+    private async Task AccountChanged(ChangeEventArgs e)
+    {
+        _accountId = (string?)e.Value;
+        Reparse();
+        (_undoing, _undoNote) = (null, null);
+        await LoadImportsAsync();
+    }
+
+    private async Task LoadImportsAsync()
+    {
+        try
+        {
+            _imports = _accountId is null ? [] : await Store.GetImportsAsync(_accountId);
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            // The list is a convenience; importing still works without it.
+            _imports = [];
+        }
+    }
+
+    private void AskUndo(ImportSummary import) => (_undoing, _undoNote) = (import, null);
+
+    private async Task UndoAsync()
+    {
+        if (_undoing is not { } import) return;
+        _undoBusy = true;
+        _error = null;
+        try
+        {
+            var removed = await Store.UndoImportAsync(import.Id);
+            _undoNote = $"Removed {removed} transaction(s) from {AccountName(import.AccountId)}. If that import set the account's balance, correct it on the Accounts page.";
+            if (_result?.BatchId == import.Id) _result = null;
+            _undoing = null;
+            await LoadImportsAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't undo the import: {ex.Message}";
+        }
+        finally
+        {
+            _undoBusy = false;
+        }
+    }
+
+    private string AccountName(string accountId) => _accounts?.FirstOrDefault(a => a.AccountId == accountId)?.DisplayName ?? "the account";
+
+    private static string ImportedAt(ImportSummary import)
+    {
+        var local = import.ImportedAt.ToLocalTime();
+        return $"{Display.Date(DateOnly.FromDateTime(local.DateTime))} {local.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture)}";
+    }
+
+    private static string SourceName(string source) => source switch
+    {
+        "paste" => "Pasted text",
+        "backup" => "Restored backup",
+        _ => source,
+    };
+
+    private void DateOrderChanged(ChangeEventArgs e)
+    {
+        _dateOrder = Enum.Parse<DateOrder>((string)e.Value!);
+        Reparse();
+    }
+
+    private void RoleChanged(int column, ChangeEventArgs e)
+    {
+        var roles = _parse!.ColumnRoles.ToArray();
+        roles[column] = Enum.Parse<ColumnRole>((string)e.Value!);
+        _manualRoles = roles;
+        Reparse();
+    }
+
+    private void Toggle(string id)
+    {
+        if (!_excluded.Remove(id)) _excluded.Add(id);
+    }
+
+    private void ToggleAll()
+    {
+        _excluded = _excluded.Count == 0 ? _preview.Select(p => p.Transaction.TransactionId).ToHashSet() : [];
+    }
+
+    /// <summary>Card sites show what you owe with either sign; store it as a positive amount owed.</summary>
+    private decimal EndingBalance(decimal balance) => SelectedAccount?.IsLiability == true ? Math.Abs(balance) : balance;
+
+    private async Task ImportAsync()
+    {
+        _importing = true;
+        _error = null;
+        try
+        {
+            var ending = _updateBalance ? StatementBalance : null;
+            _result = await Store.ImportAsync(_accountId!, new ImportTransactionsRequest(
+                Included.ToList(),
+                ending?.Balance,
+                ending is { AsOf: var date } ? AtMidnightUtc(date) : null,
+                _source));
+            _resultAccountId = _accountId;
+            (_undoing, _undoNote, _source) = (null, null, "paste");
+            await LoadImportsAsync();
+            await LoadMemoryAsync(); // the tags just imported are now the newest
+            await NoteBalanceAsync(_accountId!, ending);
+
+            (_loan, _loanText) = (null, null);
+            _text = "";
+            _pictures.Clear();
+            _pictureNote = null;
+            _manualRoles = null;
+            _parse = null;
+            _preview = [];
+            _excluded = [];
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Import failed: {ex.Message}";
+        }
+        finally
+        {
+            _importing = false;
+        }
+    }
+
+    private static DateTimeOffset AtMidnightUtc(DateOnly date) => new(date.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+
+    /// <summary>
+    /// Says whether the import set the account's balance. It doesn't when the account's balance is
+    /// dated after the statement (say, typed in when the account was added), so an older statement
+    /// can't overwrite a newer balance; the user can still choose the statement's.
+    /// </summary>
+    private async Task NoteBalanceAsync(string accountId, (decimal Balance, DateOnly AsOf)? ending)
+    {
+        (_balanceNote, _staleBalance) = (null, null);
+        if (ending is not { } statement) return;
+        try
+        {
+            _accounts = await Store.GetAccountsAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            return;
+        }
+
+        if (_accounts.FirstOrDefault(a => a.AccountId == accountId) is not { } account) return;
+        if (account.CurrentBalance == statement.Balance && account.BalanceAsOf is { } asOf && DateOnly.FromDateTime(asOf.UtcDateTime) == statement.AsOf)
+        {
+            _balanceNote = $"Set {account.DisplayName}'s balance to {Money.Format(statement.Balance, CurrencyRates.CurrencyOf(account))} as of {Display.Date(statement.AsOf)}.";
+        }
+        else if (account.BalanceAsOf is { } later)
+        {
+            _balanceNote = $"{account.DisplayName}'s balance wasn't changed: {Money.Format(account.CurrentBalance ?? 0, CurrencyRates.CurrencyOf(account))} is as of {Display.Date(DateOnly.FromDateTime(later.Date))}, after this statement's {Money.Format(statement.Balance)} as of {Display.Date(statement.AsOf)}.";
+            _staleBalance = (accountId, statement.Balance, statement.AsOf);
+        }
+    }
+
+    /// <summary>Sets the account's balance to the statement's, although the account had a later one.</summary>
+    private async Task UseStatementBalanceAsync()
+    {
+        if (_staleBalance is not { } stale || _accounts?.FirstOrDefault(a => a.AccountId == stale.AccountId) is not { } account) return;
+        _importing = true;
+        _error = null;
+        try
+        {
+            await Store.UpdateAccountAsync(account.AccountId, new AccountRequest(
+                account.Nickname ?? account.DisplayName, account.InstitutionName, account.AccountCategory, account.AccountType,
+                account.AccountNumberDisplay?.TrimStart('*'), stale.Balance, AtMidnightUtc(stale.AsOf),
+                account.AccountCategory == AccountCategory.LocAccount ? account.CreditLine : null, MapleLedger.Core.Investments.CurrencyRates.CurrencyOf(account)));
+            await NoteBalanceAsync(account.AccountId, (stale.Balance, stale.AsOf));
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't set the balance: {ex.Message}";
+        }
+        finally
+        {
+            _importing = false;
+        }
+    }
+
+    private static string LayoutName(PasteLayout layout) => layout switch
+    {
+        PasteLayout.TabSeparated => "a table",
+        PasteLayout.CommaSeparated => "CSV",
+        PasteLayout.OneCellPerLine => "a table with one cell per line",
+        PasteLayout.FreeText => "statement lines",
+        _ => "text",
+    };
+
+    private static string RoleName(ColumnRole role) => role switch
+    {
+        ColumnRole.Ignore => "Ignore",
+        ColumnRole.Date => "Date",
+        ColumnRole.PostedDate => "Posted date",
+        ColumnRole.Description => "Description",
+        ColumnRole.Amount => "Amount (+/−)",
+        ColumnRole.Debit => "Money out",
+        ColumnRole.Credit => "Money in",
+        ColumnRole.Balance => "Balance",
+        _ => role.ToString(),
+    };
+}

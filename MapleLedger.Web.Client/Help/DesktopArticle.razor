@@ -1,0 +1,70 @@
+@inject UserSession Session
+
+<div class="help-article">
+    <p class="help-lead">
+        The desktop app runs LoonieBooks on this Windows computer: the LoonieBooks window starts it, and it runs until you stop it.
+        There's no sign-in here; the ledger belongs to this computer. Other devices at home (a laptop, tablet or phone) can
+        open it too, once sharing is turned on.
+    </p>
+
+    <h3>Closing the LoonieBooks window</h3>
+    <p>
+        Closing the window asks whether to <strong>keep running in the notification area</strong> or <strong>stop LoonieBooks</strong>.
+        Kept running, its maple leaf icon sits by the clock (under the ^ arrow if Windows tucks it away): click it to show the window
+        again, or right-click it to open LoonieBooks in the browser or exit. Tick <span class="help-ui">Don't ask again</span> to
+        skip the question; change your answer with <span class="help-ui">When this window closes</span> at the bottom of the window.
+        While LoonieBooks is stopped, this computer and your other devices can't open it.
+    </p>
+
+    <h3>Sharing on your home network</h3>
+    <ol>
+        <li>In the LoonieBooks window on the computer, turn on sharing on this network and choose a <strong>household passcode</strong>.
+            Sharing needs the ledger to be in LoonieBooks' database rather than one browser.</li>
+        <li>The first time, Windows asks to let LoonieBooks through the firewall: allow it on <em>private</em> networks only.</li>
+        <li>On the other device, open the address the LoonieBooks window shows, such as <code>https://computer-name:7085</code>
+            (phones and Macs: <code>https://computer-name.local:7085</code>, or the computer's IP address).</li>
+        <li>Enter the household passcode. The device stays signed in for 30 days of use, and shares the same ledger: everyone sees
+            and can change the same accounts and transactions.</li>
+    </ol>
+    <p>
+        <span class="help-ui">Sign out</span> in the top bar on a device asks for the passcode again there. Choosing a new passcode in the
+        LoonieBooks window signs every device out.
+    </p>
+
+    <h3>Connect a phone</h3>
+    <p>
+        Easier than typing a passcode on a phone: on the computer itself, choose <span class="help-ui">Connect a phone</span> in the top bar and scan
+        the QR code with the phone's camera. It signs the phone in. Each code works once, for a few minutes.
+    </p>
+
+    <h3>"Your connection isn't private"</h3>
+    <p>
+        LoonieBooks secures the connection with its own certificate, which other devices don't trust until you tell them to.
+        Continue past the warning once, then use <span class="help-ui">download it</span> on the passcode page (or the file saved from the
+        LoonieBooks window) and install it:
+    </p>
+    <ul>
+        <li><strong>iPhone or iPad</strong>: install the profile in Settings › General › VPN &amp; Device Management, then turn on full trust in
+            Settings › General › About › Certificate Trust Settings.</li>
+        <li><strong>Android</strong>: Settings › Security › Encryption &amp; credentials › Install a certificate › CA certificate.</li>
+        <li><strong>Windows</strong>: open the <code>.cer</code> file, Install Certificate, and put it in Trusted Root Certification Authorities.</li>
+    </ul>
+    <p>Check the fingerprint shown matches the one in the LoonieBooks window. The certificate only works for this computer's own addresses.</p>
+
+    <h3>Sending photos from a phone</h3>
+    <p>
+        <span class="help-ui">Send from phone</span>, on the Import and Scan receipt pages, works from the computer even without sharing turned on:
+        the phone opens a single-use upload page on your home network.
+    </p>
+
+    <h3>Upgrading</h3>
+    <p>
+        Unzip the new version anywhere and open its <code>LoonieBooks.exe</code>; it closes the older one and takes over. Your ledger
+        and settings live in your Windows profile, not the app's folder, so nothing needs copying. Before updating the ledger to a
+        new version, LoonieBooks saves a copy of it, and if the update fails the ledger is put back as it was.
+    </p>
+    @if (!Session.IsDesktop)
+    {
+        <p class="help-note">You're not using the desktop app right now, so none of this applies here.</p>
+    }
+</div>

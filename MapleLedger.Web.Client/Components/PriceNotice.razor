@@ -1,0 +1,98 @@
+@using MapleLedger.Core.Investments
+@inject Preferences Preferences
+
+@* The dashboard's word on the holdings' prices: when they were last updated from stocktreemap.com,
+   and which holdings weren't and why. The list can be dismissed until it changes. *@
+@if (Refresh is { } r && (r.CheckedAt is not null || r.Unreachable || r.LastPriced is not null))
+{
+    @if (r is { Unreachable: true, AsOf: null })
+    {
+        <div class="alert alert-secondary py-2 small" role="status">
+            Couldn't reach stocktreemap.com for today's prices, so holdings are valued
+            @(r.LastPriced is { } last ? $"at their prices from {Display.Moment(last)}" : "at their statements' prices").
+        </div>
+    }
+    else if (r.FeedStale && r.AsOf is { } stale)
+    {
+        <div class="alert alert-warning py-2 small" role="status">
+            stocktreemap.com hasn't updated its prices since @Display.Moment(stale), so holding values may be out of date.
+        </div>
+    }
+
+    @if (_problems.Count > 0 && !_dismissed)
+    {
+        <div class="alert alert-warning py-2 small" role="status">
+            <div class="d-flex flex-wrap align-items-baseline gap-2">
+                <span class="fw-semibold">
+                    @(_problems.Count == 1 ? "1 holding isn't" : $"{_problems.Count} holdings aren't") updated from stocktreemap.com,
+                    so @(_problems.Count == 1 ? "its value is" : "their values are") from the statement or an older price:
+                </span>
+                <a class="alert-link ms-auto" href="@($"holdings?accountId={Uri.EscapeDataString(_problems[0].AccountId)}")">Review on Holdings</a>
+                <button type="button" class="btn btn-sm btn-link p-0" title="Hide this until the list changes" @onclick="DismissAsync">Dismiss</button>
+            </div>
+            <ul class="mb-0 mt-1">
+                @foreach (var (accountId, m, problem) in _problems.Take(MaxListed))
+                {
+                    <li><span class="fw-semibold">@m.Holding.Label</span> in @AccountName(accountId): @problem</li>
+                }
+                @if (_problems.Count > MaxListed)
+                {
+                    <li>and @(_problems.Count - MaxListed) more</li>
+                }
+            </ul>
+            @if (_problems.Count(p => ListingRequests.CanAsk(p.Match)) is > 0 and var askable)
+            {
+                <div class="mt-1">On Holdings, you can request @(askable == 1 ? "this symbol's" : "these symbols'") data to be added.</div>
+            }
+            @if (_problems.Any(p => QuoteRefresh.AwaitsOptionPrices(p.Match)))
+            {
+                <div class="mt-1">On Holdings you can get option prices from Yahoo Finance.</div>
+            }
+        </div>
+    }
+
+    @if (r.AsOf is { } asOf && _total > 0)
+    {
+        <p class="small text-body-secondary mb-3" role="status">
+            Holding prices from stocktreemap.com as of @Display.Moment(asOf)@(r.CheckedAt is { } at ? $", checked {Display.Moment(at)}" : "")
+            · @_priced of @_total holdings updated@(r.Unreachable ? " (couldn't reach it just now)" : "").
+            <a href="holdings">Holdings</a>
+        </p>
+    }
+}
+
+@code {
+    private const int MaxListed = 6;
+    private const string DismissedPreference = "dashboard.pricesDismissed";
+
+    [Parameter] public QuoteRefresh? Refresh { get; set; }
+
+    [Parameter, EditorRequired] public IReadOnlyList<Account> Accounts { get; set; } = [];
+
+    private List<(string AccountId, QuoteMatch Match, string Problem)> _problems = [];
+    private int _priced;
+    private int _total;
+    private bool _dismissed;
+    private string _signature = "";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _problems = Refresh?.Problems.ToList() ?? [];
+        _priced = Refresh?.All.Count(m => m.Priced) ?? 0;
+        _total = Refresh?.All.Count() ?? 0;
+
+        // What's wrong, not when: dismissing the list hides it until a holding joins or leaves it.
+        _signature = string.Join(";", _problems
+            .Select(p => $"{p.AccountId}|{p.Match.Holding.Symbol}|{p.Match.Holding.Currency}|{(p.Match.Miss?.ToString() ?? "Stale")}")
+            .Order(StringComparer.Ordinal));
+        _dismissed = _problems.Count > 0 && await Preferences.GetAsync<string>(DismissedPreference) == _signature;
+    }
+
+    private async Task DismissAsync()
+    {
+        _dismissed = true;
+        await Preferences.SetAsync(DismissedPreference, _signature);
+    }
+
+    private string AccountName(string accountId) => Accounts.FirstOrDefault(a => a.AccountId == accountId)?.DisplayName ?? "an account";
+}

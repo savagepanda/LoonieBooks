@@ -1,0 +1,262 @@
+@page "/tax/review"
+@inject ILedgerStore Store
+@inject NavigationManager Navigation
+
+<PageTitle>Review tax suggestions · LoonieBooks</PageTitle>
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <div>
+        <a href="tax?year=@_year" class="small">← Tax report</a>
+        <h1 class="h3 mb-0">Review tax suggestions</h1>
+    </div>
+    <select class="form-select w-auto" aria-label="Tax year" value="@_year" @onchange="YearChanged">
+        @foreach (var y in Periods.TaxYears)
+        {
+            <option value="@y">@y tax year</option>
+        }
+    </select>
+</div>
+
+<p class="small text-body-secondary">
+    Go through each transaction LoonieBooks flagged as possibly claimable on your @_year return. Suggestions are deliberately
+    broad, so many won't be claimable. This is a record-keeping aid, not tax advice.
+</p>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@if (_review is null)
+{
+    <p class="text-body-secondary">Loading…</p>
+}
+else
+{
+    var total = _pending.Count + _confirmed + _rejected;
+    var decided = _confirmed + _rejected;
+    <div class="mb-3">
+        <div class="d-flex justify-content-between small mb-1">
+            <span><strong>@_pending.Count</strong> left to review</span>
+            <span>@_confirmed claimed · @_rejected not claimable</span>
+        </div>
+        <div class="progress" role="progressbar" aria-label="Review progress" aria-valuenow="@decided" aria-valuemin="0" aria-valuemax="@total">
+            <div class="progress-bar bg-success" style="width: @Percent(decided, total)"></div>
+        </div>
+    </div>
+
+    @if (Current is { } item)
+    {
+        var tax = TaxCategories.Find(item.Tax?.Code);
+        <div class="card review-card mb-2" tabindex="0" @ref="_card" @onkeydown="OnKeyDown" aria-describedby="review-keys">
+            <div class="card-body">
+                <div class="d-flex flex-wrap justify-content-between gap-2">
+                    <div class="small text-body-secondary">
+                        @Display.Date(item.Transaction.EffectiveDate) · @AccountName(item.Transaction.AccountId) · @(_index + 1) of @_pending.Count
+                    </div>
+                    <div class="fs-4 fw-semibold"><AmountText Transaction="item.Transaction" Currency="@_accounts.CurrencyOf(item.Transaction.AccountId)" /></div>
+                </div>
+                <div class="fs-5 mb-1">@item.Transaction.Description</div>
+                <div class="small text-body-secondary mb-3">
+                    @(item.Transaction.Category ?? Categories.Uncategorized)@(string.IsNullOrEmpty(item.Transaction.SubCategory) ? "" : $" › {item.Transaction.SubCategory}")
+                </div>
+
+                @if (tax is not null)
+                {
+                    <div class="border rounded p-2 mb-3">
+                        <div><strong>@tax.Name</strong> <span class="small text-body-secondary">@tax.CraReference</span></div>
+                        <div class="small text-body-secondary">@tax.Guidance</div>
+                    </div>
+                }
+
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-success" @onclick="() => DecideAsync(item, item.Tax!.Code, TaxTagStatus.Confirmed)" disabled="@_saving">Claim it <kbd>C</kbd></button>
+                    <button class="btn btn-outline-secondary" @onclick="() => DecideAsync(item, item.Tax!.Code, TaxTagStatus.Rejected)" disabled="@_saving">Not claimable <kbd>N</kbd></button>
+                    <button class="btn btn-link" @onclick="Skip" disabled="@_saving">Skip <kbd>S</kbd></button>
+                    <button class="btn btn-link" @onclick="Back" disabled="@(_saving || _index == 0)">Back <kbd>←</kbd></button>
+                </div>
+            </div>
+        </div>
+
+        <div class="d-flex flex-wrap align-items-center gap-2 mb-1">
+            <label class="small" for="other-category">Claim under a different tax category:</label>
+            <select id="other-category" class="form-select form-select-sm w-auto" @bind="_otherCode">
+                <option value="">Choose…</option>
+                @foreach (var c in TaxCategories.All.Where(c => c.Code != item.Tax?.Code))
+                {
+                    <option value="@c.Code">@c.Name (@c.CraReference)</option>
+                }
+            </select>
+            <button class="btn btn-sm btn-outline-success" @onclick="() => DecideAsync(item, _otherCode!, TaxTagStatus.Confirmed)" disabled="@(_saving || string.IsNullOrEmpty(_otherCode))">Claim</button>
+        </div>
+        <p id="review-keys" class="small text-body-secondary">
+            Keyboard: <kbd>C</kbd> claim · <kbd>N</kbd> not claimable · <kbd>S</kbd> or <kbd>→</kbd> skip · <kbd>←</kbd> back.
+        </p>
+    }
+    else
+    {
+        <div class="alert alert-success">
+            Nothing is waiting for review in @_year. <a href="tax?year=@_year">Back to the tax report</a>.
+        </div>
+    }
+
+    <h2 class="h5 mt-4">Might have been missed</h2>
+    <p class="small text-body-secondary">
+        Spending in @string.Join(", ", TaxReviewBuilder.CategoriesToCheck) during @_year that has no tax tag. Most of it won't be
+        claimable (gym memberships, toys, gifts to friends), but prescriptions, therapy, donations, tuition and child care sometimes
+        slip through. Pick a tax category to claim one, or "Not claimable" to dismiss it.
+    </p>
+    @if (_review.PossiblyMissed.Count == 0)
+    {
+        <p class="text-body-secondary">Nothing to check.</p>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-sm align-middle transactions-table">
+                <thead>
+                    <tr><th>Date</th><th>Description</th><th>Category</th><th>Tax</th><th class="text-end">Amount</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var missed in _review.PossiblyMissed)
+                    {
+                        <tr @key="(missed.Transaction.AccountId, missed.Transaction.TransactionId)">
+                            <td class="text-nowrap">@Display.Date(missed.Transaction.EffectiveDate)</td>
+                            <td>
+                                <div>@missed.Transaction.Description</div>
+                                <div class="small text-body-secondary">@AccountName(missed.Transaction.AccountId)</div>
+                            </td>
+                            <TransactionClassifier Item="missed" Currency="@_accounts.CurrencyOf(missed.Transaction.AccountId)" />
+                            <td class="text-end text-nowrap"><AmountText Transaction="missed.Transaction" Currency="@_accounts.CurrencyOf(missed.Transaction.AccountId)" /></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (_review.PossiblyMissed.Count >= TaxReviewBuilder.MaxPossiblyMissed)
+        {
+            <p class="small text-body-secondary">Showing the newest @TaxReviewBuilder.MaxPossiblyMissed. Use the <a href="transactions?from=@_year-01-01&to=@_year-12-31">transactions page</a> to see the rest.</p>
+        }
+    }
+}
+
+@code {
+    [SupplyParameterFromQuery] public int? Year { get; set; }
+
+    private int _year;
+    private TaxReview? _review;
+    private List<LedgerTransaction> _pending = [];
+    private int _index, _confirmed, _rejected;
+    private IReadOnlyList<Account> _accounts = [];
+    private string? _otherCode, _error;
+    private bool _saving, _focus;
+    private ElementReference _card;
+
+    private LedgerTransaction? Current => _index < _pending.Count ? _pending[_index] : null;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _year = Year ?? Periods.DefaultTaxYear;
+        try
+        {
+            _accounts = await Store.GetAccountsAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load accounts: {ex.Message}";
+        }
+
+        await LoadAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focus && Current is not null)
+        {
+            _focus = false;
+            await _card.FocusAsync();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _error = null;
+            _review = null;
+            _review = await Store.GetTaxReviewAsync(_year);
+            _pending = [.. _review.Pending];
+            (_index, _confirmed, _rejected) = (0, _review.Confirmed, _review.Rejected);
+            _focus = true;
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load the review: {ex.Message}";
+        }
+    }
+
+    private void YearChanged(ChangeEventArgs e) => Navigation.NavigateTo($"tax/review?year={e.Value}");
+
+    private async Task DecideAsync(LedgerTransaction item, string code, TaxTagStatus status)
+    {
+        if (_saving) return;
+        _saving = true;
+        _error = null;
+        try
+        {
+            await Store.SetTaxTagAsync(item.Transaction, item.Tax! with { Code = code, Status = status });
+            _pending.Remove(item);
+            if (status == TaxTagStatus.Confirmed) _confirmed++; else _rejected++;
+            if (_index >= _pending.Count) _index = 0;
+            _otherCode = null;
+            _focus = true;
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't save that: {ex.Message}";
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void Skip()
+    {
+        // Skipping past the end wraps around to whatever is still undecided.
+        _index = _pending.Count == 0 ? 0 : (_index + 1) % _pending.Count;
+        _focus = true;
+    }
+
+    private void Back()
+    {
+        if (_index > 0) _index--;
+        _focus = true;
+    }
+
+    private Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (Current is not { } item || e.CtrlKey || e.AltKey || e.MetaKey) return Task.CompletedTask;
+
+        switch (e.Key)
+        {
+            case "c" or "C":
+                return DecideAsync(item, item.Tax!.Code, TaxTagStatus.Confirmed);
+            case "n" or "N":
+                return DecideAsync(item, item.Tax!.Code, TaxTagStatus.Rejected);
+            case "s" or "S" or "ArrowRight":
+                Skip();
+                break;
+            case "ArrowLeft":
+                Back();
+                break;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private string AccountName(string accountId) => _accounts.FirstOrDefault(a => a.AccountId == accountId)?.DisplayName ?? "";
+
+    private static string Percent(int part, int whole) =>
+        (whole == 0 ? 100 : part * 100.0 / whole).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + "%";
+}

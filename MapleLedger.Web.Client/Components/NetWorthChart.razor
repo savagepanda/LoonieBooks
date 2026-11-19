@@ -1,0 +1,33 @@
+@* Net worth at the end of each month, worked back from today's balances, in Canadian dollars. *@
+
+<MonthLineChart Title="@Title" AriaLabel="Net worth at the end of each month" Points="_points" Selected="Selected" OnSelect="PointSelected" />
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<MonthlyNetWorth> Months { get; set; } = [];
+
+    [Parameter] public string Title { get; set; } = "Net worth by month";
+
+    /// <summary>The selected month, highlighted.</summary>
+    [Parameter] public (int Year, int Month)? Selected { get; set; }
+
+    /// <summary>A month was clicked: that month, or null when the selected month was clicked again. Unset leaves the chart unclickable.</summary>
+    [Parameter] public EventCallback<MonthlyNetWorth?> OnSelect { get; set; }
+
+    private IReadOnlyList<MonthLineChart.Point> _points = [];
+
+    protected override void OnParametersSet() =>
+        _points = Months.Select(m => new MonthLineChart.Point(m.Year, m.Month, m.NetWorth, Tooltip(m))).ToList();
+
+    private EventCallback<MonthLineChart.Point?> PointSelected =>
+        OnSelect.HasDelegate ? EventCallback.Factory.Create<MonthLineChart.Point?>(this, SelectAsync) : default;
+
+    private Task SelectAsync(MonthLineChart.Point? point) =>
+        OnSelect.InvokeAsync(point is null ? null : Months.First(m => m.Year == point.Year && m.Month == point.Month));
+
+    private static string Tooltip(MonthlyNetWorth m)
+    {
+        var parts = $"accounts {Money.Format(m.Assets)}";
+        if (m.RealEstate != 0) parts += $", real estate {Money.Format(m.RealEstate)}";
+        return $"{MonthLineChart.When(m.Year, m.Month, m.AsOf)}: net worth {Money.Format(m.NetWorth)} ({parts}, owed {Money.Format(m.Liabilities)})";
+    }
+}

@@ -1,0 +1,127 @@
+@* Picks any number of accounts. The button reads like a select ("All accounts", "TD Chequing",
+   "3 accounts"); it opens a list of checkboxes. No accounts ticked means every account, so the
+   selection can never be empty. Each tick applies at once. *@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<button type="button" @ref="_button" class="form-select @(Small ? "form-select-sm" : "") text-start account-filter-toggle"
+        aria-haspopup="dialog" aria-expanded="@(_open ? "true" : "false")" aria-label="@($"Accounts: {Label}")"
+        disabled="@Disabled" @onclick="ToggleAsync">
+    <span class="category-picker-value">@Label</span>
+</button>
+
+@if (_open)
+{
+    <div class="category-picker-backdrop" @onclick="CloseAsync"></div>
+    <div class="account-filter-panel" @ref="_panel" role="dialog" aria-label="Choose accounts" @onkeydown="KeyAsync">
+        <label class="account-filter-item fw-semibold">
+            <input class="form-check-input mt-0" type="checkbox" checked="@(Selected.Count == 0)" @onchange="AllAsync" />
+            <span>All accounts</span>
+        </label>
+        <div class="category-picker-divider" role="separator"></div>
+        @foreach (var account in Accounts)
+        {
+            var id = account.AccountId;
+            <label class="account-filter-item" @key="id">
+                <input class="form-check-input mt-0" type="checkbox" checked="@Selected.Contains(id)" @onchange="() => ToggleAccountAsync(id)" />
+                <span class="text-truncate">@account.DisplayName</span>
+            </label>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<Account> Accounts { get; set; } = [];
+
+    /// <summary>The ticked accounts; empty means all of them.</summary>
+    [Parameter] public IReadOnlyList<string> Selected { get; set; } = [];
+    [Parameter] public EventCallback<IReadOnlyList<string>> SelectedChanged { get; set; }
+
+    [Parameter] public bool Small { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    private ElementReference _button, _panel;
+    private bool _open, _placePending;
+    private IJSObjectReference? _module, _anchor;
+
+    private string Label => Selected switch
+    {
+        { Count: 0 } => "All accounts",
+        { Count: 1 } one => Accounts.FirstOrDefault(a => a.AccountId == one[0])?.DisplayName ?? "1 account",
+        var many when many.Count == Accounts.Count => "All accounts",
+        var many => $"{many.Count} accounts",
+    };
+
+    private async Task ToggleAsync()
+    {
+        if (_open)
+        {
+            await CloseAsync();
+            return;
+        }
+
+        _open = _placePending = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_placePending) return;
+        _placePending = false;
+        _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/popover.js");
+        _anchor = await _module.InvokeAsync<IJSObjectReference>("anchor", _button, _panel);
+    }
+
+    private Task AllAsync() => Selected.Count == 0 ? Task.CompletedTask : SelectedChanged.InvokeAsync([]);
+
+    private Task ToggleAccountAsync(string id)
+    {
+        var next = Selected.Contains(id) ? Selected.Where(s => s != id).ToList() : [.. Selected, id];
+        // Ticking every account is the same as all of them; keep it short so new accounts join in.
+        if (next.Count == Accounts.Count) next = [];
+        // Keep the accounts' own order, so the label and the query don't depend on click order.
+        return SelectedChanged.InvokeAsync(Accounts.Select(a => a.AccountId).Where(next.Contains).ToList());
+    }
+
+    private async Task KeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key != "Escape") return;
+        await CloseAsync();
+        await _button.FocusAsync();
+    }
+
+    private async Task CloseAsync()
+    {
+        _open = false;
+        await ReleaseAnchorAsync();
+    }
+
+    private async Task ReleaseAnchorAsync()
+    {
+        if (_anchor is null) return;
+        try
+        {
+            await _anchor.InvokeVoidAsync("dispose");
+            await _anchor.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+
+        _anchor = null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await ReleaseAnchorAsync();
+        if (_module is not null)
+        {
+            try
+            {
+                await _module.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+    }
+}

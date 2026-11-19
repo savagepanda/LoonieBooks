@@ -1,0 +1,161 @@
+@* One person's tax situation: province, whether their employer withholds tax, payroll plans (ESPP, group RRSP, pension), RRSP limit and share of joint rental property. Saved as soon as it changes. *@
+@using System.Globalization
+@inject ILedgerStore Store
+
+<div class="tax-situation">
+    <div class="row g-2 align-items-center mb-2">
+        <label class="col-sm-4 col-lg-3 col-form-label col-form-label-sm fw-semibold" for="@Id("province")">Province on Dec 31, @Year</label>
+        <div class="col-sm-8 col-lg-9">
+            <select id="@Id("province")" class="form-select form-select-sm" style="max-width: 18rem" value="@(Situation.Province ?? "")" disabled="@_busy"
+                    @onchange="e => SaveAsync(Situation with { Province = string.IsNullOrEmpty((string?)e.Value) ? null : (string?)e.Value })">
+                <option value="">Choose…</option>
+                @foreach (var (provinceCode, provinceName) in TaxRates.ProvinceNames)
+                {
+                    <option value="@provinceCode">@provinceName</option>
+                }
+            </select>
+        </div>
+    </div>
+    <div class="row g-2 align-items-center mb-2">
+        <div class="col-sm-4 col-lg-3 small fw-semibold">Pay</div>
+        <div class="col-sm-8 col-lg-9">
+            <div class="form-check form-switch mb-0">
+                <input id="@Id("withholds")" class="form-check-input" type="checkbox" role="switch" checked="@Situation.EmployerWithholds" disabled="@_busy"
+                       @onchange="e => SaveAsync(Situation with { EmployerWithholds = e.Value is true })" />
+                <label class="form-check-label small" for="@Id("withholds")">Employer withholds tax from pay</label>
+            </div>
+        </div>
+    </div>
+
+    @if (Situation.EmployerWithholds)
+    {
+        @PlanRow("espp", "ESPP", Situation.EsppPercent, v => Situation with { EsppPercent = v },
+            Situation.EsppMatchPercent, "% of yours", v => Situation with { EsppMatchPercent = v })
+        @PlanRow("rrsp", "Group RRSP", Situation.RrspPercent, v => Situation with { RrspPercent = v },
+            Situation.RrspMatchPercent, "% of salary", v => Situation with { RrspMatchPercent = v })
+        @PlanRow("pension", "Pension plan", Situation.PensionPercent, v => Situation with { PensionPercent = v },
+            Situation.PensionMatchPercent, "% of salary", v => Situation with { PensionMatchPercent = v })
+
+        <div class="row g-2 align-items-center mb-2">
+            <label class="col-sm-4 col-lg-3 col-form-label col-form-label-sm fw-semibold" for="@Id("pension-adjustment")">Pension adjustment</label>
+            <div class="col-sm-8 col-lg-9 d-flex flex-wrap align-items-center gap-2">
+                <div class="input-group input-group-sm w-auto">
+                    <span class="input-group-text">CA$</span>
+                    <input id="@Id("pension-adjustment")" type="number" class="form-control" style="flex: 0 0 8rem" min="0" step="1" placeholder="Estimate" disabled="@_busy"
+                           aria-describedby="@Id("pension-adjustment-help")"
+                           value="@Situation.PensionAdjustment?.ToString("0.##", CultureInfo.InvariantCulture)"
+                           @onchange="e => SaveAsync(Situation with { PensionAdjustment = Parse(e.Value) })" />
+                </div>
+                <span id="@Id("pension-adjustment-help")" class="form-text m-0">
+                    T4 box 52; it lowers next year's RRSP room. Leave blank to use the pension contributions above (a defined contribution plan).
+                </span>
+            </div>
+        </div>
+    }
+
+    <div class="row g-2 align-items-center">
+        <label class="col-sm-4 col-lg-3 col-form-label col-form-label-sm fw-semibold" for="@Id("rrsp-limit")">RRSP deduction limit</label>
+        <div class="col-sm-8 col-lg-9 d-flex flex-wrap align-items-center gap-2">
+            <div class="input-group input-group-sm w-auto">
+                <span class="input-group-text">CA$</span>
+                <input id="@Id("rrsp-limit")" type="number" class="form-control" style="flex: 0 0 8rem" min="0" step="1" placeholder="Estimate" disabled="@_busy"
+                       aria-describedby="@Id("rrsp-limit-help")"
+                       value="@Situation.RrspDeductionLimit?.ToString("0.##", CultureInfo.InvariantCulture)"
+                       @onchange="e => SaveAsync(Situation with { RrspDeductionLimit = Parse(e.Value) })" />
+            </div>
+            <span id="@Id("rrsp-limit-help")" class="form-text m-0">
+                For @Year, from last year's notice of assessment. Leave blank to estimate it from this year's pay.
+            </span>
+        </div>
+    </div>
+
+    @if (RentalShare is { } share)
+    {
+        <div class="row g-2 align-items-center mt-2">
+            <label class="col-sm-4 col-lg-3 col-form-label col-form-label-sm fw-semibold" for="@Id("rental-share")">Share of joint rental</label>
+            <div class="col-sm-8 col-lg-9 d-flex flex-wrap align-items-center gap-2">
+                <div class="input-group input-group-sm w-auto">
+                    <input id="@Id("rental-share")" type="number" class="form-control" style="flex: 0 0 4.5rem" min="0" max="100" step="1" disabled="@_busy"
+                           placeholder="@((share * 100).ToString("0.##", CultureInfo.InvariantCulture))" aria-describedby="@Id("rental-share-help")"
+                           value="@Situation.RentalSharePercent?.ToString("0.##", CultureInfo.InvariantCulture)"
+                           @onchange="e => SaveAsync(Situation with { RentalSharePercent = Parse(e.Value) })" />
+                    <span class="input-group-text">%</span>
+                </div>
+                <span id="@Id("rental-share-help")" class="form-text m-0">
+                    Of property owned with others: this share of the rent split between co-owners, and of rental expenses no one claimed,
+                    goes on this person's Form T776. Leave blank to share what others haven't taken equally.
+                </span>
+            </div>
+        </div>
+    }
+
+    @if (_error is not null)
+    {
+        <div class="small text-danger mt-2">@_error</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public int Year { get; set; }
+    [Parameter, EditorRequired] public string PersonId { get; set; } = "";
+    [Parameter, EditorRequired] public TaxSituation Situation { get; set; } = new();
+
+    /// <summary>The person's share of jointly owned rental property in use, when the household splits rent; null hides the field.</summary>
+    [Parameter] public decimal? RentalShare { get; set; }
+
+    /// <summary>Raised after a save, so the estimate can be recalculated.</summary>
+    [Parameter] public EventCallback Changed { get; set; }
+
+    private bool _busy;
+    private string? _error;
+
+    private string Id(string field) => $"{field}-{PersonId}";
+
+    private static decimal? Parse(object? value) =>
+        decimal.TryParse(value as string, NumberStyles.Number, CultureInfo.InvariantCulture, out var amount) ? amount : null;
+
+    /// <summary>A payroll plan: the person's contribution as a percent of salary, then what the employer adds.</summary>
+    private RenderFragment PlanRow(string field, string label, decimal? yours, Func<decimal?, TaxSituation> withYours,
+        decimal? employer, string employerUnit, Func<decimal?, TaxSituation> withEmployer) => __builder =>
+    {
+        <div class="row g-2 align-items-center mb-2">
+            <label class="col-sm-4 col-lg-3 col-form-label col-form-label-sm fw-semibold" for="@Id(field)">@label</label>
+            <div class="col-sm-8 col-lg-9 d-flex flex-wrap align-items-center gap-2">
+                <div class="input-group input-group-sm w-auto">
+                    <input id="@Id(field)" type="number" class="form-control" style="flex: 0 0 4.5rem" min="0" max="100" step="0.5" placeholder="0" disabled="@_busy"
+                           aria-label="@($"{label}: your contribution, percent of salary")"
+                           value="@yours?.ToString("0.##", CultureInfo.InvariantCulture)"
+                           @onchange="e => SaveAsync(withYours(Parse(e.Value)))" />
+                    <span class="input-group-text">% of salary</span>
+                </div>
+                <span class="small text-body-secondary">employer adds</span>
+                <div class="input-group input-group-sm w-auto">
+                    <input id="@Id(field + "-match")" type="number" class="form-control" style="flex: 0 0 4.5rem" min="0" max="100" step="0.5" placeholder="0" disabled="@_busy"
+                           aria-label="@($"{label}: employer adds, {employerUnit.TrimStart('%', ' ')}")"
+                           value="@employer?.ToString("0.##", CultureInfo.InvariantCulture)"
+                           @onchange="e => SaveAsync(withEmployer(Parse(e.Value)))" />
+                    <span class="input-group-text">@employerUnit</span>
+                </div>
+            </div>
+        </div>
+    };
+
+    private async Task SaveAsync(TaxSituation situation)
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            await Store.SaveTaxSituationAsync(Year, PersonId, situation);
+            await Changed.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

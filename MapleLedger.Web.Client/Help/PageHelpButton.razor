@@ -1,0 +1,95 @@
+@implements IDisposable
+@inject NavigationManager Navigation
+@inject UserSession Session
+
+@* The ? in the header: opens the help article for the page you're on in a dialog, so you keep your
+   place, or the help page itself where a page has no article of its own. *@
+@if (_article is null)
+{
+    <a class="ml-header-link ml-help-button" href="help" title="Help" aria-label="Help">
+        <span class="help-icon help-icon-help" aria-hidden="true"></span>
+    </a>
+}
+else
+{
+    <button type="button" class="btn ml-header-link ml-help-button" title="Help with this page" aria-label="Help with this page"
+            aria-haspopup="dialog" @onclick="Open">
+        <span class="help-icon help-icon-help" aria-hidden="true"></span>
+    </button>
+}
+
+@if (_open && _article is { } article)
+{
+    <div class="modal d-block help-dialog" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="page-help-title"
+         @ref="_dialog" @onclick="Close" @onkeydown="Key">
+        <div class="modal-dialog modal-dialog-scrollable modal-lg" @onclick:stopPropagation="true">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <span class="help-icon help-icon-@article.Icon me-2" aria-hidden="true"></span>
+                    <h2 class="modal-title h5" id="page-help-title">@article.Title</h2>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <DynamicComponent Type="article.ComponentType" />
+                </div>
+                <div class="modal-footer justify-content-between">
+                    <a href="help">All help topics</a>
+                    <button type="button" class="btn btn-primary" @onclick="Close">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="modal-backdrop show"></div>
+}
+
+@code {
+    private HelpArticleEntry? _article;
+    private bool _open;
+    private bool _focus;
+    private ElementReference _dialog;
+
+    protected override void OnInitialized()
+    {
+        Navigation.LocationChanged += LocationChanged;
+        Resolve(Navigation.Uri);
+    }
+
+    // A link inside the article (to another page, or to another article on the help page) closes it.
+    private void LocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        Resolve(e.Location);
+        _open = false;
+        StateHasChanged();
+    }
+
+    private void Resolve(string uri)
+    {
+        var article = HelpCatalog.ForPage(Navigation.ToBaseRelativePath(uri));
+        _article = article is { DesktopOnly: true } && !Session.IsDesktop ? null : article;
+    }
+
+    private void Open()
+    {
+        _open = true;
+        _focus = true;
+    }
+
+    private void Close() => _open = false;
+
+    private void Key(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") Close();
+    }
+
+    // Focus goes into the dialog, so Esc reaches it and the page behind isn't tabbed through.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focus && _open)
+        {
+            _focus = false;
+            await _dialog.FocusAsync();
+        }
+    }
+
+    public void Dispose() => Navigation.LocationChanged -= LocationChanged;
+}

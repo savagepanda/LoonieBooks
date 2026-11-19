@@ -1,0 +1,133 @@
+<div class="help-article">
+    <p class="help-lead">
+        For an RRSP, TFSA, FHSA or non-registered account, LoonieBooks keeps what the account holds on a statement date (each
+        fund or stock, its market value and book value) rather than every trade. Import the latest monthly statement or the
+        broker's holdings report every month or quarter; each import replaces the account's holdings and keeps its balance, and
+        so your net worth, up to date. Investment accounts don't import transactions, so they aren't listed on
+        <a href="import">Import</a>.
+    </p>
+
+    <h3>Why holdings, not trades</h3>
+    <ul>
+        <li>Buying and selling inside the account only swaps cash for shares. Imported as transactions, they'd show up as large
+            spending and income.</li>
+        <li>Dividends and interest earned inside an RRSP, TFSA or FHSA aren't your income for tax. For a non-registered account,
+            your broker's T5 and T3 slips report them.</li>
+        <li>Market gains and losses never appear as transactions, so trades alone can't keep the balance right.</li>
+        <li>Money you put in or take out still shows up on the chequing side, as a transfer, with RRSP and FHSA contributions
+            tagged for the <a href="help?a=tax-report">tax report</a>.</li>
+    </ul>
+
+    <h3>Importing holdings</h3>
+    <ol>
+        <li>Add the account on <a href="accounts">Accounts</a> with the type <span class="help-ui">Investment</span>, if you haven't.</li>
+        <li>On your broker's website, download the latest monthly statement (PDF) or the holdings (or <em>positions</em>) report as
+            CSV. You can also select the holdings table on the page, copy it, and paste it in.</li>
+        <li>On <a href="holdings">Holdings</a>, choose the <span class="help-ui">Account</span> (<span class="help-ui">Holdings</span>
+            beside the account on Accounts opens the page with it chosen). Its <span class="help-ui">Account currency</span> shows
+            beside it: holdings that don't state a currency are read as that one, so set a US-dollar account to USD on
+            <a href="accounts">Accounts</a> (<span class="help-ui">Edit</span>; clicking the currency takes you there) before importing. Then drag the file onto the box under it,
+            or click the box to choose it, or paste the table and press
+            <span class="help-ui">Read pasted text</span>. It's read on this device.</li>
+        <li>From a statement, LoonieBooks reads the holdings section: the table under a header such as <em>Symbol, Quantity, Price,
+            Market value</em>, including sections like <em>U.S. dollar holdings</em>, and stops at the account activity. Statements
+            are laid out differently by each broker, so check what it found. If it can't find the table, use the CSV report or
+            paste the table instead. Scanned statements (pictures) can't be read.</li>
+        <li>Check the <span class="help-ui">Columns</span>. LoonieBooks guesses them from the header names; change any it got wrong.
+            Only <span class="help-ui">Market value</span> is required (or <span class="help-ui">Quantity</span> and <span class="help-ui">Price</span>,
+            which it multiplies). Total lines and section titles are left out; open the note under the count to see them.
+            A row named by a currency, such as Interactive Brokers' <em>USD</em> and <em>CAD</em> cash lines, is read as cash in that
+            currency: its quantity is the cash, whatever price and value the report gives it in another currency.</li>
+        <li>If the report covers several accounts (Wealthsimple's does), pick which one to import. Account numbers show only their
+            last four digits, and aren't stored.</li>
+        <li>Check <span class="help-ui">Holdings as of</span>, the report's date (for a statement, the end of its period).</li>
+        <li>Leave <span class="help-ui">Set the account balance</span> ticked to make the account's balance the holdings' total (in the
+            account's currency), then
+            <span class="help-ui">Save holdings</span>. A balance already set from a later date is kept.
+            <span class="help-ui">Start over</span> clears what was read without saving.</li>
+    </ol>
+
+    <h3>US dollars and other currencies</h3>
+    <p>
+        The <span class="help-ui">Exchange rate</span> beside the account is the one rate the whole ledger uses for US dollars (and for
+        any other currency your holdings are in). When the page opens, LoonieBooks gets the Bank of Canada's latest daily rate,
+        sending only the currency code, and uses it; <span class="help-ui">Get the latest</span> asks again. To use your own rate, for
+        example your broker's, type it in. A new rate revalues every holding in that currency, and an account whose balance was its
+        holdings' total gets the new total, so your net worth follows. Without an internet connection the last rate is kept. Each
+        account's balance is in its own currency; net worth adds them up in Canadian dollars at these rates.
+    </p>
+
+    <h3>Today's prices</h3>
+    <p>
+        Between statements, LoonieBooks prices listed stocks and ETFs from <a href="https://stocktreemap.com" target="_blank" rel="noopener">stocktreemap.com</a>,
+        when this page or the <a href="">dashboard</a> opens (at most every 15 minutes) and when you press
+        <span class="help-ui">Refresh prices</span>. It downloads the whole list of prices and looks your holdings up in it on this
+        device, so nothing about your holdings is sent. Each priced holding's market value becomes its quantity times the new price, and an
+        account whose balance was its holdings' total gets the new total, so your net worth follows. The time under a price is when it
+        was quoted. Prices are updated every couple of hours during the trading day, so they can be up to two hours behind the market.
+    </p>
+    <ul>
+        <li>A symbol without an exchange is looked up by the holding's currency: in Canadian dollars, on the TSX (then the TSX
+            Venture, Cboe Canada and the CSE); in US dollars, in the US. <em>BRK.B</em>, <em>REI.UN</em> and <em>TSX:XEQT</em> are all
+            understood.</li>
+        <li>A price is only used in the holding's own currency, since the same symbol elsewhere is often another company.</li>
+        <li>A statement without symbol or quantity columns that names the ticker in brackets at the end of the description
+            (<em>REDDIT INC CDR C$HDG (RDDT)</em>) is priced by that ticker, with the quantity its value and price imply.</li>
+        <li>Some holdings keep the statement's price; the note under the holdings says which and why. Mutual funds (codes such as
+            <em>TDB902</em>), GICs, bonds and cash aren't in the list, and a price far from the holding's own recent one is left out
+            in case it's the wrong listing, or the shares were split (import a new statement then).</li>
+        <li>A price older than the statement isn't used, and the next import replaces the prices with the statement's until the
+            following refresh.</li>
+        <li>A price stocktreemap hasn't updated for more than five days is still used, but flagged: the listing may have stopped
+            trading or left stocktreemap's list. If stocktreemap stops updating altogether, the page and the dashboard say since
+            when.</li>
+    </ul>
+    <p>
+        Under the account's holdings, the note says when stocktreemap's prices are from and when LoonieBooks last checked, and lists
+        the holdings that weren't updated and why. The <a href="">dashboard</a> shows the same for every account.
+    </p>
+    <p>
+        A stock or ETF that isn't in stocktreemap's list (a smaller Canadian ETF, say) can be added: press
+        <span class="help-ui">Ask stocktreemap.com to add</span> under the list. This one step does send something: just those
+        symbols and their currency, never quantities, values, accounts or your other holdings, and only when you press it.
+        stocktreemap looks each one up and adds it if it's a listing in that currency; the price is saved at once, and from then on
+        it's updated with the rest. If it can't be found, the list says so, and the button isn't offered for it again for a week.
+        Mutual funds can't be added this way, since they aren't listed on an exchange.
+    </p>
+
+    <h3>Options</h3>
+    <p>
+        A holding whose symbol names an option contract (<em>INTC 17DEC27 35 C</em> as Interactive Brokers writes it,
+        <em>INTC271217C00035000</em>, or Questrade's <em>INTC17Dec27C35.00</em>) is read as contracts of 100 shares, with the price per
+        share: 3 contracts at US$26.75 are worth US$8,025. A report that gave such a holding's value as quantity times price is put
+        right on import, and holdings imported before are put right when prices next refresh.
+    </p>
+    <p>
+        stocktreemap doesn't carry options, so they aren't asked about there. Instead, press
+        <span class="help-ui">Get option prices from Yahoo Finance</span> under the list. From then on, each refresh sends the option
+        contracts' symbols (nothing else: no quantities, values or other holdings) to this site's own server, which asks Yahoo Finance
+        for their prices, since a browser can't ask Yahoo itself. This browser remembers the choice; <span class="help-ui">Stop</span>
+        beside the option prices turns it off. Yahoo's option prices can be delayed, and a contract that rarely trades may show a
+        price from days ago, which the list flags.
+    </p>
+
+    <h3>What the page shows</h3>
+    <p>Under <span class="help-ui">Holdings in</span> the chosen account, below the import:</p>
+    <ul>
+        <li>The account's market value, book value and gain over book value, in Canadian dollars.</li>
+        <li>Its holdings with quantity, price, market value, book value, the gain over book value, and each holding's share of the
+            account. Amounts in another currency show in Canadian dollars at the exchange rate, with the original amount
+            underneath.</li>
+        <li>How many holdings were priced from stocktreemap.com and as of when, with <span class="help-ui">Refresh prices</span>, and
+            which kept the statement's price.</li>
+        <li>A note when the account's balance differs from its holdings' total, for example after you edited the balance by hand.</li>
+        <li><span class="help-ui">Clear</span> removes the account's holdings (the balance stays as it is).</li>
+    </ul>
+    <p>Choose another <span class="help-ui">Account</span> to see its holdings.</p>
+
+    <p>
+        Book value and gains are what your broker reports, for keeping track. They aren't adjusted cost base (ACB) for capital
+        gains, and none of this is tax or investment advice. Holdings are included in backups; see
+        <a href="help?a=your-data">Where your data is kept</a>.
+    </p>
+</div>

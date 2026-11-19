@@ -1,0 +1,177 @@
+@page "/tax/summary"
+@inject ILedgerStore Store
+@inject IJSRuntime JS
+
+<PageTitle>@_year tax summary · LoonieBooks</PageTitle>
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3 d-print-none">
+    <a href="@BackUrl" class="small">← Tax report</a>
+    <button class="btn btn-primary" @onclick="PrintAsync" disabled="@(_report is null)">Print or save as PDF</button>
+</div>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+else if (_report is null)
+{
+    <p class="text-body-secondary">Loading…</p>
+}
+else
+{
+    var confirmed = _report.Categories
+        .Select(c => (Summary: c, Items: c.Transactions.Where(t => t.Tax?.Status == TaxTagStatus.Confirmed).ToList()))
+        .Where(c => c.Items.Count > 0)
+        .ToList();
+
+    <div class="tax-summary">
+        <header class="mb-3">
+            <h1 class="h3 mb-0">@_year tax summary@(PersonName is { } name ? $": {name}" : "")</h1>
+            <div class="small text-body-secondary">Prepared with LoonieBooks on @Display.Date(Periods.Today) · confirmed items only</div>
+        </header>
+
+        <p class="small border rounded p-2">
+            A record-keeping summary of transactions you marked as supporting deductions and credits on your @_year T1 return, with the
+            CRA line each relates to. It is not tax advice and not a return: eligibility, limits and thresholds are set by the CRA,
+            amounts shown are what you paid (or the business-use share you set), not the deduction or credit you'll receive, and you
+            need the official receipts and slips.
+        </p>
+
+        @if (_report.PendingReview > 0)
+        {
+            <p class="small fw-semibold">@_report.PendingReview suggested item(s) haven't been reviewed and are not included.</p>
+        }
+        @if (_report.MissingReceipts > 0)
+        {
+            <p class="small fw-semibold">@_report.MissingReceipts confirmed item(s) have no receipt attached in LoonieBooks.</p>
+        }
+
+        @if (confirmed.Count == 0)
+        {
+            <p>No confirmed tax items for @_year.</p>
+        }
+        else
+        {
+            <table class="table table-sm summary-totals">
+                <thead>
+                    <tr><th>CRA reference</th><th>Category</th><th>Type</th><th class="text-end">Items</th><th class="text-end">Amount</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var (summary, items) in confirmed)
+                    {
+                        <tr>
+                            <td class="text-nowrap">@summary.Category.CraReference</td>
+                            <td>@summary.Category.Name</td>
+                            <td class="small">@TaxDisplay.KindName(summary.Category.Kind)</td>
+                            <td class="text-end">@items.Count</td>
+                            <td class="text-end text-nowrap">@Money.Format(summary.Confirmed)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            @if (_report.RrspFromNextYear.Count > 0)
+            {
+                <p class="small">
+                    Not included: @_report.RrspFromNextYear.Count RRSP contribution(s) totalling
+                    @Money.Format(_report.RrspFromNextYear.Sum(t => -t.Transaction.SignedAmount)) made by
+                    @Display.Date(TaxReportBuilder.RrspDeadline(_year)), currently counted for @(_year + 1).
+                </p>
+            }
+
+            <h2 class="h5 mt-4 summary-appendix">Appendix: transactions</h2>
+            @foreach (var (summary, items) in confirmed)
+            {
+                <section class="summary-section">
+                    <h3 class="h6 mt-3 mb-1">@summary.Category.Name <span class="small text-body-secondary">@summary.Category.CraReference</span></h3>
+                    <table class="table table-sm mb-1">
+                        <thead>
+                            <tr><th>Date</th><th>Account</th><th>Description</th><th>Note</th><th>Receipt</th><th class="text-end">Amount</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var item in items)
+                            {
+                                var t = item.Transaction;
+                                <tr>
+                                    <td class="text-nowrap">
+                                        @Display.Iso(t.EffectiveDate)
+                                        @if (t.EffectiveDate.Year != _year)
+                                        {
+                                            <div class="small">claimed for @_year</div>
+                                        }
+                                    </td>
+                                    <td>@AccountName(t.AccountId)</td>
+                                    <td>
+                                        @t.Description
+                                        @if (_person is null && item.Tax?.ClaimedBy is { } member)
+                                        {
+                                            <div class="small">claimed by @(_household.FirstOrDefault(m => m.Id == member)?.Name)</div>
+                                        }
+                                    </td>
+                                    <td class="small">@item.Tax?.Note</td>
+                                    <td class="small">
+                                        @{ var receipts = _report.ReceiptsFor(t); }
+                                        @(receipts.Count == 0 ? "missing" : string.Join(", ", receipts.Select(r => r.FileName)))
+                                    </td>
+                                    <td class="text-end text-nowrap">
+                                        @Money.Format(TaxReportBuilder.ClaimedAmount(item))
+                                        @if (item.Tax?.BusinessUsePercent is { } percent && TaxCategories.AllowsBusinessUse(item.Tax.Code))
+                                        {
+                                            <div class="small">@percent.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)% of @Money.Format(-t.SignedAmount)</div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                        <tfoot>
+                            <tr><th colspan="5">Total</th><th class="text-end text-nowrap">@Money.Format(summary.Confirmed)</th></tr>
+                        </tfoot>
+                    </table>
+                </section>
+            }
+        }
+    </div>
+}
+
+@code {
+    [SupplyParameterFromQuery] public int? Year { get; set; }
+    [SupplyParameterFromQuery] public string? Person { get; set; }
+
+    private int _year;
+    private string? _person;
+    private TaxReport? _report;
+    private IReadOnlyList<Account> _accounts = [];
+    private IReadOnlyList<HouseholdMember> _household = [];
+    private string? _error;
+
+    private string BackUrl => _person is null ? $"tax?year={_year}" : $"tax?year={_year}&person={Uri.EscapeDataString(_person)}";
+
+    private string? PersonName => _person switch
+    {
+        null => null,
+        TaxReportBuilder.Unassigned => "claims not assigned to anyone",
+        var id => _household.FirstOrDefault(m => m.Id == id)?.Name,
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _year = Year ?? Periods.DefaultTaxYear;
+        _person = string.IsNullOrEmpty(Person) ? null : Person;
+        try
+        {
+            _error = null;
+            _report = null;
+            _accounts = await Store.GetAccountsAsync();
+            _household = await Store.GetHouseholdAsync();
+            _report = await Store.GetTaxReportAsync(_year, _person);
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load the summary: {ex.Message}";
+        }
+    }
+
+    private async Task PrintAsync() => await JS.InvokeVoidAsync("print");
+
+    private string AccountName(string accountId) => _accounts.FirstOrDefault(a => a.AccountId == accountId)?.DisplayName ?? accountId;
+}

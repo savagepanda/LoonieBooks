@@ -1,0 +1,45 @@
+<div class="help-article">
+    <p class="help-lead">
+        Two things can go wrong with an import: it went into the wrong account (or was the wrong file), or the same
+        transactions came in twice from two different sources. Both are quick to put right.
+    </p>
+
+    <h3>Undo an import</h3>
+    <p>
+        Right after importing, the green message has <span class="help-ui">Undo this import</span>. Later, choose the account on the
+        <a href="import">Import</a> page: <span class="help-ui">Recent imports into this account</span> lists each import with how many
+        transactions it added and how many are still there. <span class="help-ui">Undo</span> asks once more, then removes them.
+    </p>
+    <ul>
+        <li>Only what that import <em>added</em> is removed. Transactions it skipped because they were already there stay.</li>
+        <li>Anything you've done to those transactions since (categories, tags, tax choices, receipts) goes with them.</li>
+        <li>The account balance isn't changed back. If the import set it, correct it with <span class="help-ui">Edit</span> on
+            <a href="accounts">Accounts</a>.</li>
+    </ul>
+
+    <h3>Why duplicates happen</h3>
+    <p>
+        Importing the same paste twice is always safe: LoonieBooks recognises the transactions and skips them. But the same
+        statement read from two different sources, say a PDF and a CSV export, can print a purchase differently
+        (<em>NORTHERN SHIELD INSU HALIFAX</em> in one, <em>NORTHERN SHIELD INSU</em> in the other), so both copies go in and
+        the spending counts double.
+    </p>
+
+    <h3>Reviewing possible duplicates</h3>
+    <p>
+        When LoonieBooks spots pairs in the same account, with the same amount and direction, at most a few days apart and
+        with look-alike descriptions, a yellow notice appears on the Dashboard, Transactions and Import pages. Its link opens
+        <a href="duplicates">Possible duplicates</a>, which shows each pair side by side.
+    </p>
+    <ul>
+        <li>Choose which copy to <span class="help-ui">Keep</span>. The one with receipts, or your own category and tax choices, is picked
+            for you; otherwise the one with the longer description.</li>
+        <li><span class="help-ui">Merge</span> deletes the other copy and moves its receipts, category and tax choices onto the one kept.</li>
+        <li><span class="help-ui">Not duplicates, keep both</span> is for two genuine charges, such as two identical coffees on the same day.
+            The pair isn't flagged again.</li>
+        <li><span class="help-ui">Merge all…</span> merges every pair at once, keeping the copy marked Keep in each.</li>
+    </ul>
+    <p class="help-note">
+        Identical descriptions from a single import are taken as real repeats and never flagged.
+    </p>
+</div>

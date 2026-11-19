@@ -1,0 +1,471 @@
+﻿@page "/transactions"
+@inject ILedgerStore Store
+@inject CategoryCatalog Catalog
+@inject TagCatalog TagCatalog
+@inject IJSRuntime JS
+@inject Preferences Preferences
+@inject NavigationManager Navigation
+@implements IDisposable
+
+<PageTitle>Transactions · LoonieBooks</PageTitle>
+
+<h1 class="h3 mb-3">Transactions</h1>
+
+<DuplicatesNotice />
+
+<div class="row g-2 mb-3 align-items-end">
+    <div class="col-6 col-md-4 col-xl">
+        <label class="form-label small" for="from">From</label>
+        <input id="from" type="date" class="form-control form-control-sm" value="@Display.Iso(_from)" @onchange="e => SetDate(e, isFrom: true)" />
+    </div>
+    <div class="col-6 col-md-4 col-xl">
+        <label class="form-label small" for="to">To</label>
+        <input id="to" type="date" class="form-control form-control-sm" value="@Display.Iso(_to)" @onchange="e => SetDate(e, isFrom: false)" />
+    </div>
+    <div class="col-6 col-md-4 col-xl">
+        <div class="form-label small">Accounts</div>
+        <AccountFilter Accounts="_accounts" Selected="_accountIds" SelectedChanged="ChangeAccountsAsync" Small="true" />
+    </div>
+    <div class="col-6 col-md-4 col-xl">
+        <label class="form-label small" for="category">Category</label>
+        @* Either level: a top-level category covers all its sub-categories. *@
+        <select id="category" class="form-select form-select-sm" value="@CategoryValue" @onchange="e => SetFilter(() => SetCategory((string?)e.Value))">
+            <option value="">All categories</option>
+            @foreach (var node in _tree)
+            {
+                <option value="@node.Name">@node.Name</option>
+                @foreach (var sub in node.SubCategories)
+                {
+                    <option value="@($"{node.Name}{Separator}{sub}")">&nbsp;&nbsp;&nbsp;&nbsp;@sub</option>
+                }
+                @if (_category == node.Name && _subCategory == Categories.NoSubCategory)
+                {
+                    <option value="@CategoryValue">&nbsp;&nbsp;&nbsp;&nbsp;No detail</option>
+                }
+            }
+        </select>
+    </div>
+    <div class="col-6 col-md-4 col-xl">
+        <div class="form-label small">Tags</div>
+        <TagPicker Filter="true" Small="true" Selected="_tagIds" SelectedChanged="ChangeTagsAsync" />
+    </div>
+    <div class="col-6 col-md-4 col-xl">
+        <label class="form-label small" for="tax">Tax treatment</label>
+        <select id="tax" class="form-select form-select-sm" value="@_taxCode" @onchange="e => SetFilter(() => _taxCode = (string?)e.Value)">
+            <option value="">Any</option>
+            @foreach (var t in TaxCategories.All)
+            {
+                <option value="@t.Code">@t.Name</option>
+            }
+        </select>
+    </div>
+    <div class="col-6 col-md-4 col-xl">
+        <label class="form-label small" for="reviewed">Category review</label>
+        <select id="reviewed" class="form-select form-select-sm" value="@ReviewedValue" @onchange="e => SetFilter(() => _reviewed = ParseReviewed((string?)e.Value))">
+            <option value="">Any</option>
+            <option value="false">Needs review</option>
+            <option value="true">Reviewed</option>
+        </select>
+    </div>
+    <div class="col-6 col-md-4 col-xl">
+        <label class="form-label small" for="search">Search</label>
+        <input id="search" type="search" class="form-control form-control-sm" placeholder="Description" value="@_search" @onchange="e => SetFilter(() => _search = (string?)e.Value)" />
+    </div>
+</div>
+
+@if (_kind is { } kind && Categories.KindDependsOnDirection(_category))
+{
+    @* From the dashboard's income or spending list: Uncategorized money in, or out. *@
+    <div class="mb-3">
+        <button type="button" class="btn btn-sm btn-outline-secondary py-0" title="Show money in and out" @onclick="() => SetFilter(() => _kind = null)">
+            @(kind == CategoryKind.Income ? "Money in only (income)" : "Money out only (spending)") <span aria-hidden="true">×</span><span class="visually-hidden">(clear)</span>
+        </button>
+    </div>
+}
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@if (_items is null)
+{
+    <p class="text-body-secondary">Loading…</p>
+}
+else if (_items.Count == 0 && _reviewed == false)
+{
+    <p>Nothing here needs review: every category in these dates and accounts was chosen or confirmed by you.</p>
+}
+else if (_items.Count == 0)
+{
+    <p>No transactions match. <a href="import">Import transactions</a> or widen the filters.</p>
+}
+else
+{
+    <p class="small text-body-secondary">
+        @_items.Count transaction(s)@(_items.Count >= Limit ? $" (showing the newest {Limit})" : "") ·
+        in @Total(DebitCreditMemo.Credit) ·
+        out @Total(DebitCreditMemo.Debit)
+    </p>
+    @* Tags or classifies every transaction in the list at once, e.g. after searching for a rental property's bills. *@
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+        @if (_tags.Count > 0)
+        {
+            <select @key="_tagSelectVersion" class="form-select form-select-sm w-auto" aria-label="Tag or untag every transaction shown" value="" @onchange="TagAllAsync" disabled="@_tagging">
+                <option value="">Tag all @_items.Count shown…</option>
+                <optgroup label="Add tag">
+                    @foreach (var tag in _tags)
+                    {
+                        <option value="@($"add:{tag.Id}")">@tag.Name</option>
+                    }
+                </optgroup>
+                <optgroup label="Remove tag">
+                    @foreach (var tag in _tags)
+                    {
+                        <option value="@($"remove:{tag.Id}")">@tag.Name</option>
+                    }
+                </optgroup>
+            </select>
+        }
+        @* E.g. search for the lender, then mark every mortgage payment a rental property expense. *@
+        <select @key="(_tagSelectVersion, 1)" class="form-select form-select-sm w-auto" aria-label="Set the tax treatment of every transaction shown" value="" @onchange="SetTaxAllAsync" disabled="@_tagging">
+            <option value="">Set tax treatment of all @_items.Count shown…</option>
+            @foreach (var t in TaxCategories.All)
+            {
+                <option value="@t.Code">@t.Name (@t.CraReference)</option>
+            }
+            <option value="@NotClaimable">Not claimable</option>
+        </select>
+        @if (Unreviewed > 0)
+        {
+            @* Automatic categories (built-in rules, or remembered from the merchant) wait for a ✓. *@
+            <button class="btn btn-sm btn-outline-success" @onclick="MarkAllReviewedAsync" disabled="@_tagging"
+                    title="Confirm the automatic categories of every transaction shown, as they are">
+                ✓ Confirm @Unreviewed automatic @(Unreviewed == 1 ? "category" : "categories")
+            </button>
+        }
+        @if (_tagNote is not null)
+        {
+            <span class="small @(_tagNoteIsError ? "text-danger" : "text-success")">@_tagNote</span>
+        }
+    </div>
+    <div class="table-responsive">
+        <table class="table table-sm align-middle transactions-table">
+            <thead>
+                <tr>
+                    @SortHeader("Date", TransactionSortColumn.Date)
+                    @SortHeader("Description", TransactionSortColumn.Description)
+                    @SortHeader("Category", TransactionSortColumn.Category)
+                    @SortHeader("Tax", TransactionSortColumn.Tax)
+                    @SortHeader("Amount", TransactionSortColumn.Amount, "text-end")
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in _items)
+                {
+                    <tr @key="(item.Transaction.AccountId, item.Transaction.TransactionId)">
+                        <td class="text-nowrap">@Display.Date(item.Transaction.EffectiveDate)</td>
+                        <td>
+                            <div>@item.Transaction.Description</div>
+                            @* The account and the tags share a line, keeping rows short. *@
+                            <div class="transaction-meta">
+                                <span class="small text-body-secondary">@AccountName(item.Transaction.AccountId)</span>
+                                <TransactionTags Item="item" Changed="Replace" />
+                            </div>
+                        </td>
+                        <TransactionClassifier Item="item" Changed="Replace" Currency="@_accounts.CurrencyOf(item.Transaction.AccountId)" />
+                        <td class="text-end text-nowrap"><AmountText Transaction="item.Transaction" Currency="@_accounts.CurrencyOf(item.Transaction.AccountId)" /></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private const int Limit = 500;
+
+    [SupplyParameterFromQuery] public string? From { get; set; }
+    [SupplyParameterFromQuery] public string? To { get; set; }
+    // May repeat: any of those accounts.
+    [SupplyParameterFromQuery(Name = "accountId")] public string[]? AccountIds { get; set; }
+    [SupplyParameterFromQuery] public string? Category { get; set; }
+    [SupplyParameterFromQuery] public string? SubCategory { get; set; }
+    [SupplyParameterFromQuery] public string? TaxCode { get; set; }
+    [SupplyParameterFromQuery] public string? Search { get; set; }
+    [SupplyParameterFromQuery] public string? Kind { get; set; }
+    // May repeat: any of those tags.
+    [SupplyParameterFromQuery(Name = "tag")] public string[]? TagIds { get; set; }
+    // "false": only automatic categories nobody has confirmed yet (e.g. from an import's "Review" link).
+    [SupplyParameterFromQuery] public string? Reviewed { get; set; }
+
+    private DateOnly _from, _to;
+    private const char Separator = '|';
+
+    private string? _category, _subCategory, _taxCode, _search;
+    private CategoryKind? _kind;
+    private bool? _reviewed;
+
+    // From the link (an empty accountId means all accounts), or else the ones last picked here.
+    private IReadOnlyList<string> _accountIds = [];
+    private const string AccountsPreference = "transactions.accounts";
+    private IReadOnlyList<Account> _accounts = [];
+    private IReadOnlyList<CategoryNode> _tree = Categories.Tree;
+
+    // Only from the link: a tag filter isn't remembered, so the list never hides untagged spending unasked.
+    private IReadOnlyList<string> _tagIds = [];
+    private IReadOnlyList<LedgerTag> _tags = [];
+    private bool _tagging, _tagNoteIsError;
+    private int _tagSelectVersion;
+    private string? _tagNote;
+    private List<LedgerTransaction>? _items;
+    private string? _error;
+
+    // Remembered in this browser. Rows keep their place when reclassified, until the next sort or load.
+    private TransactionSortOrder _sort = new();
+    private bool _sortLoaded;
+    private const string SortPreference = "transactions.sort";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        var defaults = Periods.All(Periods.Today).Single(p => p.Key == "3m");
+        _from = Display.TryParseIso(From, out var f) ? f : defaults.From;
+        _to = Display.TryParseIso(To, out var t) ? t : defaults.To;
+        (_category, _taxCode, _search) = (Category, TaxCode, Search);
+        _accountIds = LinkNamesAccounts()
+            ? (AccountIds ?? []).Where(id => !string.IsNullOrEmpty(id)).Distinct().ToList()
+            : await Preferences.GetAsync<List<string>>(AccountsPreference) ?? [];
+        _subCategory = string.IsNullOrEmpty(Category) ? null : SubCategory;
+        _kind = Enum.TryParse<CategoryKind>(Kind, out var kind) && kind is CategoryKind.Income or CategoryKind.Expense ? kind : null;
+        _reviewed = ParseReviewed(Reviewed);
+
+        _tree = await Catalog.GetTreeAsync();
+        _tags = await TagCatalog.GetOrEmptyAsync();
+        // Forget tags deleted since the link was made.
+        _tagIds = (TagIds ?? []).Where(id => _tags.Any(t => t.Id == id)).Distinct().ToList();
+        if (!_sortLoaded)
+        {
+            _sort = await Preferences.GetAsync<TransactionSortOrder>(SortPreference) ?? new();
+            _sortLoaded = true;
+        }
+
+        try
+        {
+            _accounts = await Store.GetAccountsAsync();
+            // Forget accounts deleted since they were picked.
+            _accountIds = _accountIds.Where(id => _accounts.Any(a => a.AccountId == id)).ToList();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load accounts: {ex.Message}";
+        }
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _error = null;
+            _items = TransactionSort.Sort(await Store.SearchTransactionsAsync(new TransactionFilter(_from, _to, null, _category, _taxCode, _search, Limit, _subCategory, _accountIds, _kind, _tagIds, _reviewed)), _sort);
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load transactions: {ex.Message}";
+        }
+    }
+
+    private RenderFragment SortHeader(string label, TransactionSortColumn column, string? css = null) => __builder =>
+    {
+        var active = _sort.Column == column;
+        <th class="@css" aria-sort="@(active ? _sort.Descending ? "descending" : "ascending" : null)">
+            <button type="button" class="sort-header @(active ? "is-active" : "")" title="@($"Sort by {label.ToLowerInvariant()}")" @onclick="() => SortByAsync(column)">
+                @label<span class="sort-indicator" aria-hidden="true">@(active ? _sort.Descending ? "▼" : "▲" : "↕")</span>
+            </button>
+        </th>
+    };
+
+    private async Task SortByAsync(TransactionSortColumn column)
+    {
+        _sort = _sort.Toggle(column);
+        if (_items is not null) _items = TransactionSort.Sort(_items, _sort);
+        await Preferences.SetAsync(SortPreference, _sort);
+    }
+
+    /// <summary>Whether the address has an accountId (Blazor gives an empty array either way).</summary>
+    private bool LinkNamesAccounts() =>
+        new Uri(Navigation.Uri).Query.TrimStart('?').Split('&').Any(p => p == "accountId" || p.StartsWith("accountId=", StringComparison.Ordinal));
+
+    private async Task ChangeAccountsAsync(IReadOnlyList<string> accountIds)
+    {
+        _accountIds = accountIds;
+        await Preferences.SetAsync(AccountsPreference, _accountIds);
+        await LoadAsync();
+    }
+
+    private Task ChangeTagsAsync(IReadOnlyList<string> tagIds)
+    {
+        _tagIds = tagIds;
+        _tagNote = null;
+        return LoadAsync();
+    }
+
+    private async Task TagAllAsync(ChangeEventArgs e)
+    {
+        _tagSelectVersion++; // a fresh select, back on its prompt
+        var parts = ((string?)e.Value ?? "").Split(':', 2);
+        if (parts.Length != 2 || _items is not { Count: > 0 } items || _tags.FirstOrDefault(t => t.Id == parts[1]) is not { } tag) return;
+        var remove = parts[0] == "remove";
+        var question = remove
+            ? $"Take the tag {tag.Name} off all {items.Count} transaction(s) shown?"
+            : $"Tag all {items.Count} transaction(s) shown {tag.Name}?";
+        if (!await JS.InvokeAsync<bool>("confirm", question)) return;
+
+        _tagging = true;
+        _tagNote = null;
+        try
+        {
+            var keys = items.Select(i => new TransactionKey(i.Transaction.AccountId, i.Transaction.TransactionId)).ToList();
+            var changed = await Store.TagManyAsync(new TagManyRequest(keys, tag.Id, remove));
+            (_tagNote, _tagNoteIsError) = (remove ? $"Took {tag.Name} off {changed} transaction(s)." : $"Tagged {changed} transaction(s) {tag.Name}.", false);
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            (_tagNote, _tagNoteIsError) = (ex.Message, true);
+        }
+        finally
+        {
+            _tagging = false;
+        }
+    }
+
+    private const string NotClaimable = "-";
+
+    private async Task SetTaxAllAsync(ChangeEventArgs e)
+    {
+        _tagSelectVersion++; // a fresh select, back on its prompt
+        var value = (string?)e.Value;
+        if (string.IsNullOrEmpty(value) || _items is not { Count: > 0 } items) return;
+        var category = value == NotClaimable ? null : TaxCategories.Find(value);
+        if (category is null && value != NotClaimable) return;
+
+        var question = category is null
+            ? $"Mark all {items.Count} transaction(s) shown not claimable?"
+            : $"Claim all {items.Count} transaction(s) shown as {category.Name} ({category.CraReference})? "
+                + "Ones already claimed this way keep their details; any other tax treatment they have is replaced.";
+        if (!await JS.InvokeAsync<bool>("confirm", question)) return;
+
+        _tagging = true;
+        _tagNote = null;
+        try
+        {
+            var keys = items.Select(i => new TransactionKey(i.Transaction.AccountId, i.Transaction.TransactionId)).ToList();
+            var changed = await Store.SetTaxManyAsync(new SetTaxManyRequest(keys, category?.Code));
+            (_tagNote, _tagNoteIsError) = (category is null
+                ? $"Marked {changed} transaction(s) not claimable."
+                : $"Claimed {changed} more transaction(s) as {category.Name}.", false);
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            (_tagNote, _tagNoteIsError) = (ex.Message, true);
+        }
+        finally
+        {
+            _tagging = false;
+        }
+    }
+
+    private int Unreviewed => _items?.Count(i => !i.CategoryIsManual) ?? 0;
+
+    private string ReviewedValue => _reviewed switch { true => "true", false => "false", null => "" };
+
+    private static bool? ParseReviewed(string? value) => bool.TryParse(value, out var reviewed) ? reviewed : null;
+
+    private async Task MarkAllReviewedAsync()
+    {
+        if (_items is not { } items) return;
+        var pending = items.Where(i => !i.CategoryIsManual).ToList();
+        if (pending.Count == 0 || !await JS.InvokeAsync<bool>("confirm", $"Confirm the categories of {pending.Count} transaction(s) shown, as they are?")) return;
+
+        _tagging = true;
+        _tagNote = null;
+        try
+        {
+            var changed = await Store.MarkReviewedAsync(new MarkReviewedRequest([.. pending.Select(i => new TransactionKey(i.Transaction.AccountId, i.Transaction.TransactionId))]));
+            (_tagNote, _tagNoteIsError) = ($"Confirmed {changed} categor{(changed == 1 ? "y" : "ies")}.", false);
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            (_tagNote, _tagNoteIsError) = (ex.Message, true);
+        }
+        finally
+        {
+            _tagging = false;
+        }
+    }
+
+    private string CategoryValue => _category is null ? "" : _subCategory is null ? _category : $"{_category}{Separator}{_subCategory}";
+
+    private void SetCategory(string? value)
+    {
+        var parts = (value ?? "").Split(Separator, 2);
+        _category = parts[0].Length == 0 ? null : parts[0];
+        _kind = null;
+        _subCategory = parts.Length == 2 ? parts[1] : null;
+    }
+
+    private Task SetFilter(Action apply)
+    {
+        apply();
+        return LoadAsync();
+    }
+
+    private Task SetDate(ChangeEventArgs e, bool isFrom)
+    {
+        if (!Display.TryParseIso((string?)e.Value, out var date)) return Task.CompletedTask;
+        if (isFrom) _from = date; else _to = date;
+        return LoadAsync();
+    }
+
+    protected override void OnInitialized()
+    {
+        Catalog.Changed += CategoriesChanged;
+        TagCatalog.Changed += TagsChanged;
+    }
+
+    public void Dispose()
+    {
+        Catalog.Changed -= CategoriesChanged;
+        TagCatalog.Changed -= TagsChanged;
+    }
+
+    // A tag added from a row's picker joins the bulk-tag list.
+    private async void TagsChanged()
+    {
+        _tags = await TagCatalog.GetOrEmptyAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    // A category added from a row's picker joins the filter list.
+    private async void CategoriesChanged()
+    {
+        _tree = await Catalog.GetTreeAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void Replace(LedgerTransaction updated)
+    {
+        var index = _items!.FindIndex(i => i.Transaction.AccountId == updated.Transaction.AccountId && i.Transaction.TransactionId == updated.Transaction.TransactionId);
+        if (index >= 0) _items[index] = updated;
+    }
+
+    /// <summary>Money in or out of the listed transactions, a sum per currency ("CA$500.00 + US$20.00").</summary>
+    private string Total(DebitCreditMemo direction) => _accounts.Totals(
+        _items!.Where(i => i.Transaction.DebitCreditMemo == direction).Select(i => i.Transaction));
+
+    private string AccountName(string accountId) => _accounts.FirstOrDefault(a => a.AccountId == accountId)?.DisplayName ?? "";
+}

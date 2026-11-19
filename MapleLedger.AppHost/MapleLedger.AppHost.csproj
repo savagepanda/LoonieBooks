@@ -1,0 +1,21 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.6.0">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AspireUseCliBundle>true</AspireUseCliBundle>
+    <UserSecretsId>58b3eeab-506a-4cf2-a2cd-ff7ac3992959</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MapleLedger.ApiService\MapleLedger.ApiService.csproj" />
+    <ProjectReference Include="..\MapleLedger.Web\MapleLedger.Web.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.Docker" Version="13.6.0" />
+  </ItemGroup>
+
+</Project>

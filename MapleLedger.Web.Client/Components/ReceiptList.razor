@@ -1,0 +1,119 @@
+@* The receipts attached to one transaction: download, remove, or attach another. *@
+@inject ILedgerStore Store
+@inject FileDownloader Downloader
+@inject IJSRuntime JS
+
+<div class="receipt-list d-flex flex-wrap align-items-center gap-2 small">
+    @foreach (var receipt in Receipts)
+    {
+        <span class="d-inline-flex align-items-center gap-1">
+            <button class="btn btn-link btn-sm p-0 text-truncate receipt-name" title="Download @receipt.FileName" @onclick="() => DownloadAsync(receipt)" disabled="@_busy">
+                <span aria-hidden="true">📎</span> @receipt.FileName
+            </button>
+            <button class="btn btn-link btn-sm p-0 text-body-secondary" title="Remove this receipt" aria-label="Remove receipt @receipt.FileName" @onclick="() => DeleteAsync(receipt)" disabled="@_busy">✕</button>
+        </span>
+    }
+    @if (Receipts.Count == 0 && ShowMissing)
+    {
+        <span class="badge text-bg-warning">No receipt</span>
+    }
+    <label class="btn btn-sm btn-outline-secondary py-0 mb-0 @(_busy ? "disabled" : "")" title="Attach a receipt (PDF or photo, up to 5 MB)">
+        @(_busy ? "Saving…" : Receipts.Count == 0 ? "Attach receipt" : "Attach another")
+        <InputFile class="d-none" accept="@Accept" OnChange="UploadAsync" disabled="@_busy" />
+    </label>
+    @if (_error is not null)
+    {
+        <span class="text-danger w-100">@_error</span>
+    }
+</div>
+
+@code {
+    private const string Accept = ".pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif";
+
+    [Parameter, EditorRequired] public Transaction Transaction { get; set; } = default!;
+    [Parameter, EditorRequired] public IReadOnlyList<ReceiptInfo> Receipts { get; set; } = [];
+
+    /// <summary>Flag the transaction when it has no receipt (confirmed claims need one).</summary>
+    [Parameter] public bool ShowMissing { get; set; }
+
+    /// <summary>Raised after a receipt is added or removed.</summary>
+    [Parameter] public EventCallback Changed { get; set; }
+
+    private bool _busy;
+    private string? _error;
+
+    private async Task UploadAsync(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        _error = null;
+        if (file.Size > Data.LedgerService.MaxReceiptBytes)
+        {
+            _error = $"{file.Name} is larger than {Data.LedgerService.MaxReceiptBytes / (1024 * 1024)} MB.";
+            return;
+        }
+
+        _busy = true;
+        try
+        {
+            using var stream = new MemoryStream();
+            await file.OpenReadStream(Data.LedgerService.MaxReceiptBytes).CopyToAsync(stream);
+            await Store.AddReceiptAsync(Transaction, new UploadReceiptRequest(file.Name, ContentTypeOf(file), stream.ToArray()));
+            await Changed.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException or IOException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task DownloadAsync(ReceiptInfo receipt)
+    {
+        _error = null;
+        try
+        {
+            await Downloader.DownloadBytesAsync(receipt.FileName, receipt.ContentType, await Store.GetReceiptContentAsync(receipt));
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task DeleteAsync(ReceiptInfo receipt)
+    {
+        if (!await JS.InvokeAsync<bool>("confirm", $"Remove the receipt \"{receipt.FileName}\"? This deletes the file from LoonieBooks and can't be undone.")) return;
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            await Store.DeleteReceiptAsync(receipt);
+            await Changed.InvokeAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>Some browsers report no type for HEIC photos; fall back to the extension.</summary>
+    private static string ContentTypeOf(IBrowserFile file) =>
+        !string.IsNullOrEmpty(file.ContentType) ? file.ContentType : Path.GetExtension(file.Name).ToLowerInvariant() switch
+        {
+            ".pdf" => "application/pdf",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".webp" => "image/webp",
+            ".heic" => "image/heic",
+            ".heif" => "image/heif",
+            _ => "application/octet-stream",
+        };
+}

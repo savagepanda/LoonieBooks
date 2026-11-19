@@ -1,0 +1,266 @@
+﻿@page "/data"
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@inject UserSession Session
+@inject ILedgerStore Store
+@inject BrowserLedgerStore BrowserStore
+@inject ServerLedgerStore CloudStore
+@inject FileDownloader Downloader
+@inject CategoryCatalog Catalog
+@inject TagCatalog TagCatalog
+
+<PageTitle>Your data · LoonieBooks</PageTitle>
+
+<h1 class="h3 mb-3">Your data</h1>
+
+@if (_message is not null)
+{
+    <div class="alert @(_messageIsError ? "alert-danger" : "alert-success")" role="status">@_message</div>
+}
+
+<div class="card mb-3">
+    <div class="card-body">
+        @if (Store.Location == StorageLocation.Cloud && Session.IsDesktop)
+        {
+            <h2 class="h5">Stored in LoonieBooks' database</h2>
+            <p class="mb-0">
+                Your ledger is stored in a database LoonieBooks keeps on the computer running it, so every browser there
+                (and every device it's shared with) sees the same ledger. Download a backup whenever you like.
+            </p>
+        }
+        else if (Store.Location == StorageLocation.Cloud)
+        {
+            <h2 class="h5">Stored on this server</h2>
+            <p class="mb-0">
+                Your ledger is stored in this LoonieBooks server's database, so it's there on any device where you sign in.
+                Whoever runs this server looks after it. Download a backup whenever you like.
+            </p>
+        }
+        else
+        {
+            <h2 class="h5">Stored in this browser only</h2>
+            <p>
+                Your ledger lives in this browser's private storage on this device. It's never sent to a server, and
+                nobody else can see it.
+            </p>
+            <p class="mb-0">
+                <strong>That also means only you can keep it safe.</strong> Clearing this site's data, a private or incognito
+                window, or a different browser or device each start from an empty ledger. Download a backup regularly.
+            </p>
+        }
+    </div>
+</div>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <h2 class="h5">Backup</h2>
+        <p>A backup is a single file with all your accounts, transactions, categories and tax tags.</p>
+        <div class="d-flex flex-wrap gap-2 align-items-center">
+            <button class="btn btn-primary" @onclick="DownloadBackupAsync" disabled="@_busy">Download backup</button>
+            <label class="btn btn-outline-secondary mb-0 @(_busy ? "disabled" : "")">
+                Restore from a backup…
+                <InputFile class="d-none" accept=".json,application/json" OnChange="RestoreAsync" disabled="@_busy" />
+            </label>
+        </div>
+        <div class="form-text">Restoring adds what the backup has and skips anything already here; it never deletes.</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <h2 class="h5">@(Session.IsDesktop ? "Database storage" : "Server storage")</h2>
+        @if (Session.IsDesktop && Session.IsPremium)
+        {
+            <p>
+                If you kept a ledger in this browser before using LoonieBooks' database, copy it into the database. Anything already in
+                the database is kept and duplicates are skipped. The copy in this browser is left as it is.
+            </p>
+            <button class="btn btn-primary" @onclick="CopyBrowserToCloudAsync" disabled="@_busy">Copy this browser's ledger to the database</button>
+        }
+        else if (Session.IsDesktop)
+        {
+            <p class="mb-0">
+                LoonieBooks couldn't open its database, so for now this page uses the ledger kept in this browser.
+                Check the LoonieBooks window on the computer, then reload this page.
+            </p>
+        }
+        else if (Session.IsPremium)
+        {
+            <p>
+                If you used LoonieBooks in this browser before signing in, copy that ledger to this server. Anything already
+                on the server is kept and duplicates are skipped. The copy in this browser is left as it is.
+            </p>
+            <button class="btn btn-primary" @onclick="CopyBrowserToCloudAsync" disabled="@_busy">Copy this browser's ledger to the server</button>
+        }
+        else if (Session.IsSignedIn)
+        {
+            <p class="mb-0">
+                Your account can't store a ledger on this server yet, so your ledger stays in this browser. Whoever runs
+                this server can allow it, and then your ledger follows you to any device where you sign in.
+            </p>
+        }
+        else if (Session.SignInAvailable)
+        {
+            <p class="mb-0">
+                Sign in with Google. If whoever runs this server allows your account, you can keep your ledger here instead
+                of in one browser.
+            </p>
+        }
+        else
+        {
+            <p class="mb-0">Sign-in isn't set up on this LoonieBooks server, so ledgers are stored in the browser.</p>
+        }
+    </div>
+</div>
+
+<div class="card border-danger mt-3">
+    <div class="card-body">
+        <h2 class="h5">Start over</h2>
+        <p>
+            Delete your whole ledger @StoreName: every account, transaction, receipt, tax tag and household member, so you can
+            import again from scratch. <strong>This can't be undone.</strong> Download a backup first if you might want any of it back.
+        </p>
+        @if (!_confirmClear)
+        {
+            <button class="btn btn-outline-danger" @onclick="() => (_confirmClear, _clearWord, _clearMessage) = (true, string.Empty, null)" disabled="@_busy">Delete everything…</button>
+        }
+        else
+        {
+            <div class="d-flex flex-wrap gap-2 align-items-end">
+                <button class="btn btn-outline-primary" @onclick="DownloadBackupAsync" disabled="@_busy">Download backup first</button>
+                <div>
+                    <label class="form-label small mb-1" for="clear-word">Type DELETE to confirm</label>
+                    <input id="clear-word" class="form-control" autocomplete="off" spellcheck="false" @bind="_clearWord" @bind:event="oninput" />
+                </div>
+                <button class="btn btn-danger" @onclick="ClearAsync" disabled="@(_busy || _clearWord != "DELETE")">Delete my whole ledger</button>
+                <button class="btn btn-outline-secondary" @onclick="() => _confirmClear = false" disabled="@_busy">Cancel</button>
+            </div>
+        }
+        @if (_clearMessage is not null)
+        {
+            <div class="alert @(_clearFailed ? "alert-danger" : "alert-success") mt-3 mb-0" role="status">@_clearMessage</div>
+        }
+    </div>
+</div>
+
+@code {
+    private const long MaxBackupBytes = 200 * 1024 * 1024;
+
+    private static readonly JsonSerializerOptions BackupJson = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    private bool _busy;
+    private string? _message;
+    private bool _messageIsError;
+
+    private Task DownloadBackupAsync() => BusyAsync(async () =>
+    {
+        var backup = await Store.ExportAsync();
+        var fileName = $"looniebooks-backup-{DateTime.Now:yyyy-MM-dd}.json";
+        await Downloader.DownloadAsync(fileName, "application/json", JsonSerializer.Serialize(backup, BackupJson));
+        Show($"Downloaded {fileName}: {backup.Accounts.Count} account(s), {backup.Transactions.Count} transaction(s).");
+    });
+
+    private Task RestoreAsync(InputFileChangeEventArgs e) => BusyAsync(async () =>
+    {
+        LedgerBackup? backup;
+        try
+        {
+            await using var stream = e.File.OpenReadStream(MaxBackupBytes);
+            backup = await JsonSerializer.DeserializeAsync<LedgerBackup>(stream, BackupJson);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException)
+        {
+            Show("That file isn't a LoonieBooks backup.", isError: true);
+            return;
+        }
+
+        if (backup is null)
+        {
+            Show("That file isn't a LoonieBooks backup.", isError: true);
+            return;
+        }
+
+        var result = await Store.RestoreAsync(backup);
+        Catalog.Invalidate();
+        TagCatalog.Invalidate();
+        Show(Describe("Restored", result));
+    });
+
+    private Task CopyBrowserToCloudAsync() => BusyAsync(async () =>
+    {
+        var backup = await BrowserStore.ExportAsync();
+        if (backup.Accounts.Count == 0)
+        {
+            Show("There's no ledger stored in this browser.");
+            return;
+        }
+
+        var result = await CloudStore.RestoreAsync(backup);
+        Show(Describe(Session.IsDesktop ? "Copied to the database" : "Copied to the server", result));
+    });
+
+    private bool _confirmClear;
+    private string _clearWord = string.Empty;
+
+    private string StoreName => Store.Location == StorageLocation.Browser
+        ? "from this browser"
+        : Session.IsDesktop ? "from LoonieBooks' database" : "from this server";
+
+    // Shown in the Start over card itself: the page's message sits above, out of view down here.
+    private string? _clearMessage;
+    private bool _clearFailed;
+
+    private async Task ClearAsync()
+    {
+        if (_clearWord != "DELETE") return;
+        _busy = true;
+        (_message, _clearMessage) = (null, null);
+        try
+        {
+            var result = await Store.ClearAsync();
+            Catalog.Invalidate();
+            TagCatalog.Invalidate();
+            (_confirmClear, _clearWord, _clearFailed) = (false, string.Empty, false);
+            _clearMessage = $"Deleted {result.Accounts} account(s), {result.Transactions} transaction(s)" +
+                (result.Receipts > 0 ? $", {result.Receipts} receipt(s)" : "") +
+                (result.HouseholdMembers > 0 ? $" and {result.HouseholdMembers} household member(s)" : "") +
+                ". Your ledger is empty.";
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            (_clearMessage, _clearFailed) = ($"Couldn't delete your ledger: {ex.Message}", true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task BusyAsync(Func<Task> work)
+    {
+        _busy = true;
+        _message = null;
+        try
+        {
+            await work();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            Show(ex.Message, isError: true);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string Describe(string action, RestoreResult result) =>
+        $"{action}: {result.AccountsAdded} new account(s), {result.TransactionsAdded} new transaction(s)" +
+        (result.ReceiptsAdded > 0 ? $", {result.ReceiptsAdded} receipt(s)" : "") +
+        (result.Duplicates > 0 ? $", {result.Duplicates} already there." : ".");
+
+    private void Show(string message, bool isError = false) => (_message, _messageIsError) = (message, isError);
+}

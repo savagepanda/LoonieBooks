@@ -1,0 +1,365 @@
+@* Renders the Category and Tax cells of a transaction row and saves changes immediately. With
+   CategoryOnly it renders just the category picker, outside a table cell, to sit inside another one. *@
+@inject ILedgerStore Store
+
+@if (CategoryOnly)
+{
+    <div class="recent-category">
+        @CategoryContent
+        @if (_error is not null)
+        {
+            <div class="small text-danger">@_error</div>
+        }
+    </div>
+}
+else
+{
+    <td class="classifier-cell">
+        @if (Item.CategoryIsManual)
+        {
+            @CategoryContent
+        }
+        else
+        {
+            @* Set by the built-in rules or remembered from the merchant: one click confirms it as is. *@
+            <div class="d-flex align-items-center gap-1">
+                <div class="flex-grow-1" style="min-width: 0">@CategoryContent</div>
+                <button class="btn btn-sm btn-outline-success" title="Automatic category, not reviewed yet. Click to confirm it."
+                        aria-label="Confirm category @Categories.Label(Item.Transaction.Category, NullIfEmpty(Item.Transaction.SubCategory))"
+                        @onclick="ConfirmCategoryAsync" disabled="@_saving">✓</button>
+            </div>
+        }
+    </td>
+    <td class="classifier-cell">
+        <div class="d-flex align-items-center gap-1">
+            <select class="form-select form-select-sm" aria-label="Tax treatment" value="@ActiveTaxCode" @onchange="TaxChanged" disabled="@_saving">
+                <option value="">Not claimable</option>
+                @foreach (var tax in TaxCategories.All)
+                {
+                    <option value="@tax.Code">@tax.Name</option>
+                }
+            </select>
+            @if (Item.Tax is { Status: TaxTagStatus.Suggested } suggested)
+            {
+                <button class="btn btn-sm btn-outline-success" title="Confirm: this is claimable" aria-label="Confirm tax suggestion" @onclick="() => SaveAsync(Item.Transaction.Category, Item.Transaction.SubCategory, suggested with { Status = TaxTagStatus.Confirmed })" disabled="@_saving">✓</button>
+                <button class="btn btn-sm btn-outline-secondary" title="Reject: not claimable" aria-label="Reject tax suggestion" @onclick="() => SaveAsync(Item.Transaction.Category, Item.Transaction.SubCategory, suggested with { Status = TaxTagStatus.Rejected })" disabled="@_saving">✕</button>
+            }
+        </div>
+        @if (Item.Tax is { Status: TaxTagStatus.Suggested })
+        {
+            <div class="small text-body-secondary">Suggested, needs review</div>
+        }
+        @if (_taxNote is not null)
+        {
+            <div class="small text-success">@_taxNote</div>
+        }
+        @if (_error is not null)
+        {
+            <div class="small text-danger">@_error</div>
+        }
+    </td>
+}
+
+@code {
+    [Parameter, EditorRequired] public LedgerTransaction Item { get; set; } = default!;
+    [Parameter] public EventCallback<LedgerTransaction> Changed { get; set; }
+
+    /// <summary>The account's currency, for the amounts of similar transactions in it.</summary>
+    [Parameter] public string Currency { get; set; } = Money.Cad;
+
+    /// <summary>
+    /// After a category change, offer it for the account's other transactions from the same merchant;
+    /// after a tax change, for the account's other transactions in the same category.
+    /// </summary>
+    [Parameter] public bool OfferSimilar { get; set; } = true;
+
+    /// <summary>Only the category picker (no tax cell), e.g. for the dashboard's transaction list.</summary>
+    [Parameter] public bool CategoryOnly { get; set; }
+
+    private bool _saving;
+    private string? _error;
+    private string? _note, _taxNote;
+
+    // The "change similar transactions too?" dialog: a category for the same merchant, or a tax
+    // treatment (Code null: not claimable) for the same category.
+    private sealed record TaxTarget(string? Code, string Label);
+    private readonly string _dialogId = $"similar-{Guid.NewGuid():N}";
+    private List<LedgerTransaction>? _similar;
+    private CategoryChoice? _similarChoice;
+    private TaxTarget? _similarTax;
+    private HashSet<string> _picked = [];
+
+    private RenderFragment CategoryContent => __builder =>
+    {
+        <CategoryPicker Category="@(Item.Transaction.Category ?? Categories.Uncategorized)" SubCategory="@NullIfEmpty(Item.Transaction.SubCategory)"
+                        Disabled="_saving" OnChange="CategoryChanged" />
+        @if (_note is not null)
+        {
+            <div class="small text-success">@_note</div>
+        }
+        @if (_similar is { Count: > 0 } similar)
+        {
+            @* Fixed position, so it covers the page even though it's rendered inside this cell. *@
+            <div class="modal d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="@_dialogId" @onkeydown="DialogKey">
+                <div class="modal-dialog modal-dialog-scrollable modal-lg">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h2 class="modal-title h5" id="@_dialogId">Change similar transactions too?</h2>
+                        </div>
+                        <div class="modal-body">
+                            @if (_similarTax is { } target)
+                            {
+                                <p>
+                                    @similar.Count other transaction(s) in this account are also filed under
+                                    <strong>@Categories.Label(Item.Transaction.Category, NullIfEmpty(Item.Transaction.SubCategory))</strong>.
+                                    Set the ones you tick to <strong>@target.Label</strong>?
+                                </p>
+                            }
+                            else
+                            {
+                                <p>
+                                    @similar.Count other transaction(s) in this account have the same name as
+                                    <strong>@Item.Transaction.Description</strong> (ignoring store numbers and reference codes).
+                                    Set the ones you tick to <strong>@_similarChoice?.Label</strong>?
+                                </p>
+                            }
+                            <table class="table table-sm align-middle mb-0">
+                                <thead>
+                                    <tr>
+                                        <th><input class="form-check-input" type="checkbox" aria-label="Tick all" checked="@(_picked.Count == similar.Count)" @onchange="ToggleAllSimilar" /></th>
+                                        <th>Date</th><th>Description</th><th>Now</th><th class="text-end">Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var match in similar)
+                                    {
+                                        var id = match.Transaction.TransactionId;
+                                        <tr>
+                                            <td><input class="form-check-input" type="checkbox" aria-label="Change @match.Transaction.Description" checked="@_picked.Contains(id)" @onchange="() => TogglePicked(id)" /></td>
+                                            <td class="text-nowrap">@Display.Date(match.Transaction.EffectiveDate)</td>
+                                            <td>@match.Transaction.Description</td>
+                                            <td class="small text-nowrap">@(_similarTax is null ? Categories.Label(match.Transaction.Category, NullIfEmpty(match.Transaction.SubCategory)) : TaxLabel(match.Tax))</td>
+                                            <td class="text-end text-nowrap"><AmountText Transaction="match.Transaction" Currency="@Currency" /></td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-outline-secondary" @onclick="CloseSimilar" disabled="@_saving">Just this one</button>
+                            <button class="btn btn-primary" @onclick="ApplySimilarAsync" disabled="@(_saving || _picked.Count == 0)">
+                                @(_saving ? "Updating…" : $"Update {_picked.Count}")
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-backdrop show"></div>
+        }
+    };
+
+    private string ActiveTaxCode => Item.Tax is { Status: not TaxTagStatus.Rejected } tag ? tag.Code : "";
+
+    private static string? NullIfEmpty(string? text) => string.IsNullOrEmpty(text) ? null : text;
+
+    private async Task CategoryChanged(CategoryChoice choice)
+    {
+        _note = null;
+        if (!await SaveAsync(choice.Category, choice.SubCategory, Item.Tax) || !OfferSimilar) return;
+
+        try
+        {
+            var similar = (await Store.FindSimilarAsync(Item.Transaction))
+                .Where(s => s.Transaction.Category != choice.Category || NullIfEmpty(s.Transaction.SubCategory) != choice.SubCategory)
+                .ToList();
+            if (similar.Count == 0) return;
+            (_similar, _similarChoice, _similarTax, _picked) = (similar, choice, null, similar.Select(s => s.Transaction.TransactionId).ToHashSet());
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            // The change itself is saved; offering it for similar transactions is a convenience.
+        }
+    }
+
+    private void TogglePicked(string id)
+    {
+        if (!_picked.Remove(id)) _picked.Add(id);
+    }
+
+    private void ToggleAllSimilar() =>
+        _picked = _picked.Count == _similar!.Count ? [] : _similar.Select(s => s.Transaction.TransactionId).ToHashSet();
+
+    private void CloseSimilar() => (_similar, _similarChoice, _similarTax) = (null, null, null);
+
+    private void DialogKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && !_saving) CloseSimilar();
+    }
+
+    private async Task ApplySimilarAsync()
+    {
+        if (_similarTax is { } target)
+        {
+            await ApplySimilarTaxAsync(target);
+            return;
+        }
+
+        if (_similar is null || _similarChoice is not { } choice) return;
+        _saving = true;
+        _error = null;
+        try
+        {
+            var picked = _similar.Where(s => _picked.Contains(s.Transaction.TransactionId)).ToList();
+            var changed = await Store.ClassifyManyAsync(Item.Transaction.AccountId, new ClassifyManyRequest([.. picked.Select(p => p.Transaction.TransactionId)], choice.Category, choice.SubCategory));
+            foreach (var item in picked)
+            {
+                await Changed.InvokeAsync(item with
+                {
+                    Transaction = item.Transaction with { Category = choice.Category, SubCategory = choice.SubCategory },
+                    CategoryIsManual = true,
+                });
+            }
+
+            _note = $"Also set {changed} similar transaction(s) to {choice.Label}.";
+            CloseSimilar();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task ConfirmCategoryAsync()
+    {
+        _saving = true;
+        _error = null;
+        try
+        {
+            await Store.MarkReviewedAsync(new MarkReviewedRequest([new TransactionKey(Item.Transaction.AccountId, Item.Transaction.TransactionId)]));
+            await Changed.InvokeAsync(Item with { CategoryIsManual = true });
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task TaxChanged(ChangeEventArgs e)
+    {
+        var code = NullIfEmpty((string?)e.Value);
+        TaxTag? tax = code is null
+            // Keep a rejected tag rather than clearing it, so the suggestion isn't made again.
+            ? Item.Tax is { } existing ? existing with { Status = TaxTagStatus.Rejected } : null
+            : new TaxTag(code, TaxTagStatus.Confirmed, Item.Tax?.Note);
+        _taxNote = null;
+        var transaction = Item.Transaction;
+        if (!await SaveAsync(transaction.Category ?? Categories.Uncategorized, transaction.SubCategory, tax) || !OfferSimilar) return;
+
+        // E.g. one rental property's mortgage payment: offer the account's other mortgage payments.
+        var category = transaction.Category ?? Categories.Uncategorized;
+        if (category == Categories.Uncategorized) return;
+        var subCategory = NullIfEmpty(transaction.SubCategory);
+        try
+        {
+            var matches = await Store.SearchTransactionsAsync(new TransactionFilter(
+                AccountId: transaction.AccountId, Category: category, SubCategory: subCategory ?? Categories.NoSubCategory));
+            var similar = matches
+                .Where(m => m.Transaction.TransactionId != transaction.TransactionId
+                    && NullIfEmpty(m.Transaction.SubCategory) == subCategory
+                    && !HasTax(m.Tax, code))
+                .ToList();
+            if (similar.Count == 0) return;
+
+            // Ones claimed under another tax category stay as they are unless ticked.
+            var picked = similar
+                .Where(m => code is null || m.Tax is not { Status: TaxTagStatus.Confirmed } other || other.Code == code)
+                .Select(m => m.Transaction.TransactionId)
+                .ToHashSet();
+            var label = code is null ? "Not claimable" : TaxCategories.Find(code)?.Name ?? code;
+            (_similar, _similarChoice, _similarTax, _picked) = (similar, null, new TaxTarget(code, label), picked);
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            // The change itself is saved; offering it for similar transactions is a convenience.
+        }
+    }
+
+    private async Task ApplySimilarTaxAsync(TaxTarget target)
+    {
+        if (_similar is null) return;
+        _saving = true;
+        _error = null;
+        try
+        {
+            var picked = _similar.Where(s => _picked.Contains(s.Transaction.TransactionId)).ToList();
+            var changed = await Store.SetTaxManyAsync(new SetTaxManyRequest(
+                [.. picked.Select(p => new TransactionKey(p.Transaction.AccountId, p.Transaction.TransactionId))], target.Code));
+            foreach (var item in picked)
+            {
+                await Changed.InvokeAsync(item with { Tax = TaxAfter(item.Tax, target.Code) });
+            }
+
+            _taxNote = $"Also set {changed} similar transaction(s) to {target.Label}.";
+            CloseSimilar();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    /// <summary>Whether a transaction already has this tax treatment (null: not claimable).</summary>
+    private static bool HasTax(TaxTag? tax, string? code) => code is null
+        ? tax is null or { Status: TaxTagStatus.Rejected }
+        : tax is { Status: TaxTagStatus.Confirmed } && tax.Code == code;
+
+    /// <summary>A transaction's tax tag after <see cref="ILedgerStore.SetTaxManyAsync"/>, as the ledger sets it.</summary>
+    private static TaxTag? TaxAfter(TaxTag? tax, string? code) => code is null
+        ? tax is { Status: not TaxTagStatus.Rejected } ? tax with { Status = TaxTagStatus.Rejected } : tax
+        : tax is { Status: TaxTagStatus.Confirmed } && tax.Code == code ? tax
+        : tax is { Status: TaxTagStatus.Suggested } && tax.Code == code ? tax with { Status = TaxTagStatus.Confirmed }
+        : new TaxTag(code, TaxTagStatus.Confirmed, tax?.Note);
+
+    private static string TaxLabel(TaxTag? tax) => tax is { Status: not TaxTagStatus.Rejected }
+        ? $"{TaxCategories.Find(tax.Code)?.Name ?? tax.Code}{(tax.Status == TaxTagStatus.Suggested ? " (suggested)" : "")}"
+        : "Not claimable";
+
+    private async Task<bool> SaveAsync(string? category, string? subCategory, TaxTag? tax)
+    {
+        category ??= Categories.Uncategorized;
+        _saving = true;
+        _error = null;
+        try
+        {
+            await Store.ClassifyAsync(Item.Transaction, new ClassifyTransactionRequest(category, subCategory, tax));
+            await Changed.InvokeAsync(Item with
+            {
+                Transaction = Item.Transaction with { Category = category, SubCategory = subCategory },
+                Tax = tax,
+                CategoryIsManual = true,
+            });
+            return true;
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+            return false;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+}

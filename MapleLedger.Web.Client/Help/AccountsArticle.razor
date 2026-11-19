@@ -1,0 +1,92 @@
+<div class="help-article">
+    <p class="help-lead">
+        An account is anything with a balance: a chequing or savings account, a credit card, a line of credit, a mortgage or
+        other loan, or an investment account. Add one for each you want to follow; every transaction belongs to one.
+    </p>
+    <HelpClip Name="accounts-add" Caption="Adding a credit card with what's owed on it." />
+
+    <h3>Adding an account</h3>
+    <ol>
+        <li>On <a href="accounts">Accounts</a>, choose <span class="help-ui">Add account</span>.</li>
+        <li>Give it a <span class="help-ui">Name</span> you'll recognise, such as <em>Everyday chequing</em> or <em>Visa Infinite</em>.</li>
+        <li>Pick the <span class="help-ui">Institution</span> (start typing for a list of Canadian banks and credit unions) and the <span class="help-ui">Type</span>.</li>
+        <li>Pick its <span class="help-ui">Currency</span>: <span class="help-ui">CAD</span> for most accounts, <span class="help-ui">USD</span>
+            for a US-dollar account. Its balance is in that currency.</li>
+        <li>Optionally enter the <span class="help-ui">Last 4 digits</span>, to tell two cards from the same bank apart. Only those four
+            digits are ever stored, never the full number.</li>
+        <li>Enter the <span class="help-ui">Current balance</span> (for a credit card, line of credit or loan, the <em>Amount owed</em>, as a
+            positive number), or leave it and let an import set it. Lines of credit and cards also take a <span class="help-ui">Credit limit</span>.</li>
+        <li><span class="help-ui">Save</span>.</li>
+    </ol>
+
+    <h3>The type matters</h3>
+    <ul>
+        <li><strong>Chequing, savings, GIC and investment</strong> accounts are assets: their balances add to net worth.</li>
+        <li><strong>Credit cards, lines of credit, mortgages and loans</strong> are what you owe: their balances come off net worth.</li>
+        <li>Moving money between your own accounts, and paying a credit card, are <em>transfers</em>, not spending or income, so
+            they don't count twice. See <a href="help?a=categorizing">Categories and review</a>.</li>
+    </ul>
+
+    <h3>US-dollar accounts</h3>
+    <p>
+        The <span class="help-ui">Currency</span> column shows each account's currency, and <span class="help-ui">Balance</span> is in it
+        (every amount in LoonieBooks names its currency: CA$ for Canadian dollars, US$ for US dollars, the code for others such
+        as EUR; from a million up, amounts are shortened to two decimals, so CA$3.57M is about CA$3,570,000). When any account isn't in Canadian dollars, <span class="help-ui">In CAD</span> shows every balance in
+        Canadian dollars at the ledger's exchange rate (point at one to see the rate); the totals above each table, and net worth on
+        the dashboard, add these up. The rate is the Bank of Canada's latest, fetched when the page opens (only the currency code is
+        sent), or your own, set on <a href="holdings">Holdings</a>.
+    </p>
+    <p>
+        For an investment account, holdings whose report doesn't say their currency are read as the account's. Changing the
+        account's currency with <span class="help-ui">Edit</span> moves those holdings to the new currency, and a balance that was their
+        total becomes their total in it. That fixes holdings imported while the account was still set to CAD.
+    </p>
+
+    <h3>Keeping balances right</h3>
+    <p>
+        When an import includes a running balance (most bank pages and statements show one), the import page offers to
+        <span class="help-ui">Set account balance</span> to the latest one, with its date. The <span class="help-ui">As of</span> column shows
+        when each balance was last set. You can also correct it any time with <span class="help-ui">Edit</span>.
+    </p>
+
+    <h3>Real estate and equity</h3>
+    <p>
+        Under <span class="help-ui">Real estate</span>, <span class="help-ui">Add property</span> records a home or other property: a
+        name (such as its street address), the <span class="help-ui">City or area</span> it's in, a <span class="help-ui">Value</span>
+        (a purchase price, appraisal or assessment) and the date that value is from. Tick the mortgages and home equity lines
+        secured by it, or choose the property under <span class="help-ui">Secured by</span> when you edit the loan. A loan is
+        secured by one property at a time; a TD FlexLine's term and revolving portions can all point at the same home.
+    </p>
+    <ul>
+        <li>The table shows each property's value, what's owed on its loans, its <strong>equity</strong> (value less what's owed) and
+            its <strong>loan-to-value</strong> (what's owed as a share of the value).</li>
+        <li>A property's value counts towards net worth on the dashboard; its loans are already counted as what you owe.</li>
+    </ul>
+    <h3>Keeping a property's value current</h3>
+    <p>
+        A property's value is carried forward by its area's house price index: the CREA MLS® Home Price Index, which LoonieBooks
+        gets from ownquity.com. Pick the area from the list under <span class="help-ui">City or area</span>, or type the city
+        (<em>Oakville</em> finds <em>Oakville Milton</em>); the hint under the field says which index the value will follow. The value
+        moves by the index's change since the month it's from: for example, $800,000 in March 2019 with the index at 280 then and
+        350 now is shown as $1,000,000. The note under each value shows the change and the latest month the index has.
+    </p>
+    <ul>
+        <li>The whole index, every area and month, is downloaded and the area is found on your device, so nothing about your
+            properties is sent. LoonieBooks checks for a newer index when Accounts or the dashboard opens, at most every six hours.
+            The index is published monthly, so the latest month is usually one or two behind.</li>
+        <li>When there's no index for the name you gave, the value stays as entered; the note says so.</li>
+        <li>When you have a newer figure, such as a fresh appraisal or property assessment, <span class="help-ui">Edit</span> the
+            property and change its value and date: the index then carries it from that month.</li>
+        <li>These are estimates for your own records, not appraisals. A single home can do better or worse than its area's index.</li>
+    </ul>
+
+    <h3>Other buttons</h3>
+    <ul>
+        <li><span class="help-ui">Import</span> on a row opens the import page with that account already chosen.</li>
+        <li><span class="help-ui">Holdings</span> takes its place on an investment account and opens its holdings; importing the
+            monthly statement or the broker's holdings report keeps the balance up to date. See
+            <a href="help?a=holdings">Investment holdings</a>.</li>
+        <li><span class="help-ui">Delete</span> asks once more, then deletes the account <strong>and all its transactions</strong>. To
+            take back one wrong import instead, use undo; see <a href="help?a=undo-duplicates">Undo an import</a>.</li>
+    </ul>
+</div>

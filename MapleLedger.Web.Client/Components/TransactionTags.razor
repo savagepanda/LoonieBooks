@@ -1,0 +1,75 @@
+@* A transaction's tags as small chips, each with a × to take it off, and a "+ Tag" picker to add
+   more (or create one). Saves at once. Compact (the dashboard panel): one line of chips without ×,
+   cut off when there's no room; unticking a tag in the picker takes it off. *@
+@implements IDisposable
+@inject ILedgerStore Store
+@inject TagCatalog Catalog
+
+<div class="transaction-tags @(Compact ? "is-compact" : "")" title="@(Compact ? string.Join(", ", (Item.Tags ?? []).Select(id => _names.GetValueOrDefault(id)).OfType<string>()) : null)">
+    @foreach (var id in Item.Tags ?? [])
+    {
+        if (_names.GetValueOrDefault(id) is not { } name) continue;
+        <span class="badge rounded-pill text-bg-info fw-normal tag-chip" @key="id">
+            @name
+            @if (!Compact)
+            {
+                <button type="button" class="btn-close ms-1" aria-label="Remove tag @name" @onclick="() => RemoveAsync(id)" disabled="@_saving"></button>
+            }
+        </span>
+    }
+    <TagPicker Selected="@(Item.Tags ?? [])" SelectedChanged="SaveAsync" Disabled="_saving" />
+    @if (_error is not null)
+    {
+        <span class="small text-danger">@_error</span>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public LedgerTransaction Item { get; set; } = default!;
+    [Parameter] public EventCallback<LedgerTransaction> Changed { get; set; }
+
+    /// <summary>One short line: chips without ×.</summary>
+    [Parameter] public bool Compact { get; set; }
+
+    private Dictionary<string, string> _names = [];
+    private bool _saving;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Catalog.Changed += TagsChanged;
+        await LoadNamesAsync();
+    }
+
+    private async Task LoadNamesAsync() => _names = (await Catalog.GetOrEmptyAsync()).ToDictionary(t => t.Id, t => t.Name);
+
+    // A tag renamed, added or deleted elsewhere.
+    private async void TagsChanged()
+    {
+        await LoadNamesAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private Task RemoveAsync(string id) => SaveAsync((Item.Tags ?? []).Where(t => t != id).ToList());
+
+    private async Task SaveAsync(IReadOnlyList<string> tagIds)
+    {
+        _saving = true;
+        _error = null;
+        try
+        {
+            await Store.SetTagsAsync(Item.Transaction, tagIds);
+            await Changed.InvokeAsync(Item with { Tags = tagIds });
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    public void Dispose() => Catalog.Changed -= TagsChanged;
+}

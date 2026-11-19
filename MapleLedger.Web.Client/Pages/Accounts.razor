@@ -1,0 +1,451 @@
+@page "/accounts"
+@using MapleLedger.Core.Investments
+@using MapleLedger.Core.RealEstate
+@inject ILedgerStore Store
+@inject ExchangeRateFeed Feed
+@inject HpiFeed Hpi
+
+<PageTitle>Accounts · LoonieBooks</PageTitle>
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <h1 class="h3 mb-0">Accounts</h1>
+    <button class="btn btn-primary" @onclick="StartAdd">Add account</button>
+</div>
+
+@if (_error is not null && _editing is null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@* Adding or editing opens over the page, so the list keeps its place behind it. *@
+@if (_editing is not null)
+{
+    <div class="modal d-block" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="account-dialog-title"
+         @ref="_dialog" @onkeydown="DialogKey">
+        <div class="modal-dialog modal-dialog-scrollable modal-lg">
+            <EditForm Model="_editing" OnValidSubmit="SaveAsync" FormName="account" class="modal-content">
+                <div class="modal-header">
+                    <h2 class="modal-title h5" id="account-dialog-title">@(_editingId is null ? "Add an account" : $"Edit {_editingName}")</h2>
+                    <button type="button" class="btn-close" aria-label="Close" @onclick="CloseEditor"></button>
+                </div>
+                <div class="modal-body">
+                    <DataAnnotationsValidator />
+                    @if (_error is not null)
+                    {
+                        <div class="alert alert-danger">@_error</div>
+                    }
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label" for="nickname">Name</label>
+                            <InputText id="nickname" class="form-control" @bind-Value="_editing.Nickname" placeholder="e.g. Everyday chequing" />
+                            <ValidationMessage For="() => _editing.Nickname" />
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="institution">Institution</label>
+                            <InputText id="institution" class="form-control" list="institutions" @bind-Value="_editing.InstitutionName" />
+                            <datalist id="institutions">
+                                @foreach (var name in AccountKind.CanadianInstitutions)
+                                {
+                                    <option value="@name"></option>
+                                }
+                            </datalist>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="kind">Type</label>
+                            <InputSelect id="kind" class="form-select" @bind-Value="_editing.KindLabel">
+                                @foreach (var kind in AccountKind.All)
+                                {
+                                    <option value="@kind.Label">@kind.Label</option>
+                                }
+                            </InputSelect>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="currency">Currency</label>
+                            <InputSelect id="currency" class="form-select" @bind-Value="_editing.Currency">
+                                <option value="@Holding.Cad">CAD (Canadian dollars)</option>
+                                <option value="@ExchangeRate.Usd">USD (US dollars)</option>
+                                @if (_editing.Currency is not (Holding.Cad or ExchangeRate.Usd))
+                                {
+                                    <option value="@_editing.Currency">@_editing.Currency</option>
+                                }
+                            </InputSelect>
+                            <div class="form-text">
+                                The balance is in this currency. For an investment account, holdings that don't state a currency are
+                                in it too@(_editingId is null ? "" : ", and changing it moves them to the new one").
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="last4">Last 4 digits <span class="text-body-secondary">(optional)</span></label>
+                            <InputText id="last4" class="form-control" maxlength="4" inputmode="numeric" @bind-Value="_editing.Last4" />
+                            <div class="form-text">Only the last four digits are stored, to tell accounts apart.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="balance">@(_editing.Kind.Category is AccountCategory.LocAccount or AccountCategory.LoanAccount ? "Amount owed" : "Current balance")@($" ({_editing.Currency})")</label>
+                            <InputNumber id="balance" class="form-control" @bind-Value="_editing.Balance" step="0.01" />
+                            <div class="form-text">Updated automatically when an import includes balances.</div>
+                        </div>
+                        @if (_editing.Kind.Category == AccountCategory.LocAccount)
+                        {
+                            <div class="col-md-6">
+                                <label class="form-label" for="limit">Credit limit@($" ({_editing.Currency})")</label>
+                                <InputNumber id="limit" class="form-control" @bind-Value="_editing.CreditLine" step="0.01" />
+                            </div>
+                        }
+                        @if (_editing.Kind.Category is AccountCategory.LoanAccount or AccountCategory.LocAccount && _editing.Kind.Type != AccountType.CreditCard)
+                        {
+                            <div class="col-md-6">
+                                <label class="form-label" for="secured">Secured by</label>
+                                <InputSelect id="secured" class="form-select" @bind-Value="_editing.PropertyId">
+                                    <option value="">No property</option>
+                                    @foreach (var property in _properties)
+                                    {
+                                        <option value="@property.Id">@property.Name</option>
+                                    }
+                                </InputSelect>
+                                <div class="form-text">
+                                    The home this mortgage or line is on, for its equity.
+                                    @(_properties.Count == 0 ? "Add the property under Real estate below first." : "Add or change properties under Real estate below.")
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" @onclick="CloseEditor">Cancel</button>
+                    <button type="submit" class="btn btn-primary" disabled="@_saving">Save</button>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+    <div class="modal-backdrop show"></div>
+}
+
+@if (_accounts is null)
+{
+    <p class="text-body-secondary">Loading…</p>
+}
+else if (_accounts.Count == 0)
+{
+    <p>No accounts yet. Add your chequing, savings and credit card accounts, then import their transactions.</p>
+}
+else
+{
+    @if (MissingRates is { Count: > 0 } missing)
+    {
+        <div class="alert alert-warning py-2">
+            There's no exchange rate for @string.Join(" or ", missing) yet, so @(missing.Count == 1 ? "its" : "their") balances count as Canadian
+            dollars. @(_fetchingRates ? "Getting the Bank of Canada's rate…" : "")
+            @if (!_fetchingRates)
+            {
+                <span>Enter one on <a href="holdings">Holdings</a>.</span>
+            }
+        </div>
+    }
+
+    @foreach (var (title, group) in Groups())
+    {
+        @* Balances are in their accounts' currencies; the totals (like net worth) are in Canadian dollars. *@
+        <h2 class="h5 mt-3">@title <span class="text-body-secondary fw-normal">@Money.Format(group.Sum(_rates.BalanceInCad))</span></h2>
+        <div class="table-responsive">
+            <table class="table align-middle">
+                <thead>
+                    <tr>
+                        <th>Name</th><th>Type</th><th>Institution</th><th>Currency</th><th class="text-end">Balance</th>
+                        @if (AnyForeign)
+                        {
+                            <th class="text-end" title="The balance in Canadian dollars, at the ledger's exchange rate">In CAD</th>
+                        }
+                        <th>As of</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var account in group)
+                    {
+                        var currency = CurrencyRates.CurrencyOf(account);
+                        <tr>
+                            <td>
+                                @account.DisplayName <span class="text-body-secondary small">@account.AccountNumberDisplay</span>
+                                @if (PropertyOf(account.AccountId) is { } home)
+                                {
+                                    <div class="small text-body-secondary">Secured by @home.Name</div>
+                                }
+                            </td>
+                            <td>@AccountKind.LabelFor(account)</td>
+                            <td>@account.InstitutionName</td>
+                            <td>@currency</td>
+                            <td class="text-end text-nowrap">@(account.CurrentBalance is { } b ? Money.Format(b, currency) : "—")</td>
+                            @if (AnyForeign)
+                            {
+                                <td class="text-end text-nowrap @(currency == Holding.Cad ? "text-body-secondary" : "")" title="@RateNote(currency)">@(account.CurrentBalance is null ? "—" : Money.Format(_rates.BalanceInCad(account)))</td>
+                            }
+                            <td class="text-body-secondary small">@(account.BalanceAsOf is { } asOf ? Display.Date(DateOnly.FromDateTime(asOf.Date)) : "")</td>
+                            <td class="text-end text-nowrap">
+                                @if (account.AccountCategory == AccountCategory.InvestmentAccount)
+                                {
+                                    <a class="btn btn-sm btn-outline-secondary" href="holdings?accountId=@Uri.EscapeDataString(account.AccountId)">Holdings</a>
+                                }
+                                else
+                                {
+                                    <a class="btn btn-sm btn-outline-secondary" href="import?accountId=@Uri.EscapeDataString(account.AccountId)">Import</a>
+                                }
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => StartEdit(account)">Edit</button>
+                                @if (_confirmDelete == account.AccountId)
+                                {
+                                    <button class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(account)">Delete account and its transactions</button>
+                                }
+                                else
+                                {
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDelete = account.AccountId">Delete</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+
+    <RealEstateEditor Accounts="_accounts" Properties="_properties" Readings="_readings" Index="_index" Rates="_rates" Changed="PropertiesChangedAsync" />
+}
+
+@code {
+    private IReadOnlyList<Account>? _accounts;
+    private IReadOnlyList<ExchangeRate> _rateList = [];
+    private IReadOnlyList<RealEstateProperty> _properties = [];
+    private IReadOnlyList<HpiReading> _readings = [];
+    private HpiRefresh _index = HpiRefresh.Off;
+    private CurrencyRates _rates = CurrencyRates.None;
+    private bool _fetchingRates;
+    private AccountForm? _editing;
+    private string? _editingId;
+    private string? _editingName;
+    private ElementReference _dialog;
+    private bool _focusDialog;
+    private string? _confirmDelete;
+    private string? _error;
+    private bool _saving;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+
+        // Show the page, then bring the rates for the accounts' currencies up to date.
+        StateHasChanged();
+        await RefreshRatesAsync(_accounts?.Select(CurrencyRates.CurrencyOf) ?? []);
+        await RefreshIndexAsync();
+    }
+
+    /// <summary>A property was added, changed or deleted: reload, and bring its area's index in.</summary>
+    private async Task PropertiesChangedAsync()
+    {
+        await LoadAsync();
+        await RefreshIndexAsync();
+    }
+
+    /// <summary>
+    /// The house price index from ownquity.com for the properties' areas (and the list of areas to
+    /// pick from), saved to the ledger; the values are worked out again when it changed.
+    /// </summary>
+    private async Task RefreshIndexAsync()
+    {
+        if (!Hpi.Enabled) return;
+        try
+        {
+            _index = await Hpi.RefreshAsync(forAreaList: true);
+            if (_index.Changed) _readings = await Store.GetHpiReadingsAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            // The values show with the index as last saved.
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _accounts = await Store.GetAccountsAsync();
+            SetRates(await Store.GetExchangeRatesAsync());
+            _properties = await Store.GetPropertiesAsync();
+            _readings = await Store.GetHpiReadingsAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load accounts: {ex.Message}";
+        }
+    }
+
+    private void SetRates(IReadOnlyList<ExchangeRate> rates)
+    {
+        _rateList = rates;
+        _rates = new CurrencyRates(rates);
+    }
+
+    /// <summary>Saves the Bank of Canada's latest rate for each of these currencies that hasn't one from today or yesterday.</summary>
+    private async Task RefreshRatesAsync(IEnumerable<string> currencies)
+    {
+        var foreign = currencies.Where(c => c != Holding.Cad).Distinct().ToList();
+        if (foreign.Count == 0) return;
+
+        _fetchingRates = true;
+        try
+        {
+            var (rates, _) = await Feed.RefreshAsync(foreign, _rateList);
+            SetRates(rates);
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't save the exchange rate: {ex.Message}";
+        }
+        finally
+        {
+            _fetchingRates = false;
+        }
+    }
+
+    private RealEstateProperty? PropertyOf(string accountId) => _properties.FirstOrDefault(p => p.AccountIds.Contains(accountId));
+
+    private bool AnyForeign => _accounts?.Any(a => CurrencyRates.CurrencyOf(a) != Holding.Cad) == true;
+
+    private List<string> MissingRates => (_accounts ?? [])
+        .Select(CurrencyRates.CurrencyOf)
+        .Where(c => _rates.RateOf(c) is null)
+        .Distinct()
+        .Order(StringComparer.Ordinal)
+        .ToList();
+
+    private string? RateNote(string currency) =>
+        currency == Holding.Cad ? null
+        : _rateList.FirstOrDefault(r => r.Currency == currency) is { } rate
+            ? $"At 1 {currency} = {rate.Rate.ToString("0.0000", System.Globalization.CultureInfo.InvariantCulture)} CAD ({(rate.Source == ExchangeRateSource.BankOfCanada ? "Bank of Canada" : "entered")}, {Display.Date(rate.AsOf)})"
+            : $"No exchange rate for {currency} yet: counted as Canadian dollars";
+
+    private IEnumerable<(string Title, List<Account> Accounts)> Groups()
+    {
+        var assets = _accounts!.Where(a => !a.IsLiability).ToList();
+        var liabilities = _accounts!.Where(a => a.IsLiability).ToList();
+        if (assets.Count > 0) yield return ("Assets", assets);
+        if (liabilities.Count > 0) yield return ("Owed", liabilities);
+    }
+
+    private void StartAdd()
+    {
+        _editingId = null;
+        _editingName = null;
+        _editing = new AccountForm();
+        _error = null;
+        _focusDialog = true;
+    }
+
+    private void StartEdit(Account account)
+    {
+        _editingId = account.AccountId;
+        _editingName = account.DisplayName;
+        _error = null;
+        _focusDialog = true;
+        _editing = new AccountForm
+        {
+            Nickname = account.Nickname ?? account.DisplayName,
+            InstitutionName = account.InstitutionName,
+            KindLabel = AccountKind.LabelFor(account),
+            Last4 = account.AccountNumberDisplay?.TrimStart('*'),
+            Currency = CurrencyRates.CurrencyOf(account),
+            Balance = account.CurrentBalance,
+            CreditLine = account.CreditLine,
+            PropertyId = PropertyOf(account.AccountId)?.Id ?? "",
+        };
+    }
+
+    private void CloseEditor()
+    {
+        _editing = null;
+        _error = null;
+    }
+
+    private void DialogKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && !_saving) CloseEditor();
+    }
+
+    // Focus goes into the dialog, so Esc reaches it and the page behind isn't tabbed through.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusDialog && _editing is not null)
+        {
+            _focusDialog = false;
+            await _dialog.FocusAsync();
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true;
+        _error = null;
+        try
+        {
+            var kind = _editing!.Kind;
+
+            // Changing an account's holdings to another currency needs its rate.
+            if (_rates.RateOf(_editing.Currency) is null) await RefreshRatesAsync([_editing.Currency]);
+
+            var request = new AccountRequest(
+                _editing.Nickname, _editing.InstitutionName, kind.Category, kind.Type, _editing.Last4,
+                _editing.Balance, null, kind.Category == AccountCategory.LocAccount ? _editing.CreditLine : null, _editing.Currency);
+            var saved = _editingId is null ? await Store.CreateAccountAsync(request) : await Store.UpdateAccountAsync(_editingId, request);
+            await LinkPropertyAsync(saved, _editing.PropertyId);
+            _editing = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    /// <summary>Makes the loan secured by the chosen property (and no other), or by none.</summary>
+    private async Task LinkPropertyAsync(Account account, string propertyId)
+    {
+        var current = PropertyOf(account.AccountId);
+        var chosen = RealEstateEditor.IsLoan(account) ? _properties.FirstOrDefault(p => p.Id == propertyId) : null;
+        if (current?.Id == chosen?.Id) return;
+
+        // Linking it to a property unlinks it from any other.
+        if (chosen is not null) await Store.UpdatePropertyAsync(chosen.Id, Request(chosen, chosen.AccountIds.Append(account.AccountId)));
+        else if (current is not null) await Store.UpdatePropertyAsync(current.Id, Request(current, current.AccountIds.Where(id => id != account.AccountId)));
+
+        static PropertyRequest Request(RealEstateProperty p, IEnumerable<string> accountIds) => new(p.Name, p.City, p.Value, p.ValueAsOf, accountIds.Distinct().ToList());
+    }
+
+    private async Task DeleteAsync(Account account)
+    {
+        try
+        {
+            await Store.DeleteAccountAsync(account.AccountId);
+            _confirmDelete = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private sealed class AccountForm
+    {
+        [System.ComponentModel.DataAnnotations.Required(ErrorMessage = "Give the account a name.")]
+        public string Nickname { get; set; } = "";
+        public string? InstitutionName { get; set; }
+        public string KindLabel { get; set; } = AccountKind.All[0].Label;
+        [System.ComponentModel.DataAnnotations.RegularExpression(@"^\d{0,4}$", ErrorMessage = "Enter up to 4 digits.")]
+        public string? Last4 { get; set; }
+        public string Currency { get; set; } = Holding.Cad;
+        public decimal? Balance { get; set; }
+        public decimal? CreditLine { get; set; }
+        public string PropertyId { get; set; } = "";
+        public AccountKind Kind => AccountKind.All.First(k => k.Label == KindLabel);
+    }
+}

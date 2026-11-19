@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en-CA">
+
+<!-- The static site's page (site\publish.ps1). It stands in for MapleLedger.Web/Components/App.razor:
+     keep the two in step. -->
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="LoonieBooks: a personal finance tracker for Canadians. Your ledger stays in this browser." />
+    <base href="/" />
+    <!-- Follow the operating system's light/dark setting; Bootstrap and the chart tokens key off data-bs-theme. -->
+    <script>
+        (function () {
+            var dark = window.matchMedia('(prefers-color-scheme: dark)');
+            var apply = function () { document.documentElement.setAttribute('data-bs-theme', dark.matches ? 'dark' : 'light'); };
+            apply();
+            dark.addEventListener('change', apply);
+        })();
+    </script>
+    <title>LoonieBooks</title>
+    <link rel="stylesheet" href="lib/bootstrap/dist/css/bootstrap.min.css" />
+    <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="MapleLedger.Web.Client.styles.css" />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="alternate icon" type="image/png" href="favicon.png" />
+    <style>
+        .site-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; gap: 1rem; font-family: system-ui, sans-serif; color: #555; }
+        .site-loading img { width: 64px; height: 64px; }
+        #blazor-error-ui { display: none; position: fixed; bottom: 0; left: 0; right: 0; padding: .75rem 1rem; background: #fff3cd; color: #664d03; z-index: 2000; }
+        #blazor-error-ui .reload { margin-left: .5rem; }
+    </style>
+</head>
+
+<body>
+    <div id="app">
+        <div class="site-loading">
+            <img src="favicon.svg" alt="" />
+            <div>Loading LoonieBooks…</div>
+            <noscript>LoonieBooks needs JavaScript turned on.</noscript>
+        </div>
+    </div>
+    <div id="blazor-error-ui">
+        Something went wrong. <a href="" class="reload">Reload</a>
+    </div>
+    <script src="_framework/blazor.webassembly.js"></script>
+</body>
+
+</html>

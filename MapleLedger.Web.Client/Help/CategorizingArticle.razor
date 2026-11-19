@@ -1,0 +1,62 @@
+<div class="help-article">
+    <p class="help-lead">
+        Every transaction has a category, such as <em>Food &amp; Dining</em>, and optionally a detail, such as
+        <em>Groceries</em>. Categories drive the dashboard's totals, so it's worth getting them right; LoonieBooks does most of
+        the work and asks you to check it.
+    </p>
+
+    <h3>Where categories come from</h3>
+    <ol>
+        <li><strong>What you chose before.</strong> An import gives each transaction the category you last chose for the same merchant,
+            in that account if you have, otherwise in any account. These show as <em>remembered</em> in the import preview.</li>
+        <li><strong>Built-in rules</strong> for Canadian merchants: grocers, gas stations, utilities, pharmacies, payroll deposits, and so on.</li>
+        <li>Anything else is <em>Uncategorized</em>.</li>
+    </ol>
+
+    <h3>Reviewing automatic categories</h3>
+    <p>
+        A category set by a rule or remembered from a merchant is marked as needing review, with a ✓ button beside it on
+        <a href="transactions">Transactions</a>. Changing it, or pressing ✓, marks it reviewed.
+    </p>
+    <ol>
+        <li>On Transactions, set <span class="help-ui">Category review</span> to <em>Needs review</em>
+            (the <span class="help-ui">Review their categories</span> link after an import does this for you).</li>
+        <li>Fix the ones that are wrong.</li>
+        <li>Press <span class="help-ui">✓ Confirm … automatic categories</span> to accept all the rest at once.</li>
+    </ol>
+    <HelpClip Name="categories-review" Caption="Filing an unknown café under Restaurants, every visit at once, then confirming the rest." />
+
+    <h3>The category picker</h3>
+    <ul>
+        <li>Click a transaction's category. Categories are on the left; point at or tap one to see its details on the right.</li>
+        <li>Pick a detail, or <em>Just &lt;category&gt;</em> to file it without one.</li>
+        <li>Or type in the search box to find any category or detail by name; <kbd>Enter</kbd> takes the first match.</li>
+        <li><span class="help-ui">+ New category</span> and <span class="help-ui">+ Add detail</span> at the bottom of each column add your own.</li>
+    </ul>
+
+    <h3>Same merchant, same category</h3>
+    <p>
+        When you change a category, LoonieBooks looks for the account's other transactions from the same merchant (ignoring
+        store numbers and reference codes) and asks <em>Change similar transactions too?</em> Tick the ones to change and
+        choose <span class="help-ui">Update</span>, or <span class="help-ui">Just this one</span>. Future imports from that merchant then get
+        your choice automatically.
+    </p>
+
+    <h3>Transfers, card payments and refunds</h3>
+    <ul>
+        <li><strong>Transfer</strong> (Account Transfer, Credit Card Payment, Interac e-Transfer, Investment Contribution) is neither income
+            nor spending. Use it for money moving between your own accounts; an e-Transfer that paid someone for something
+            belongs in a spending category instead.</li>
+        <li>Money coming back in a spending category, such as a refund filed under Shopping, reduces spending rather than counting
+            as income.</li>
+        <li>Deposits left Uncategorized count as income until you file them; put pay under Income › Salary so the tax estimate
+            can find it.</li>
+    </ul>
+
+    <h3>Your own categories</h3>
+    <p>
+        On <a href="categories">Categories</a>, add a new category (it counts as spending) or a new detail under any category.
+        For a new kind of income, add a detail under <em>Income</em>. Your own show highlighted and can be deleted; the built-in
+        ones can't.
+    </p>
+</div>

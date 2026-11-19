@@ -1,0 +1,612 @@
+@page "/holdings"
+@using System.Globalization
+@using MapleLedger.Core.Import
+@using MapleLedger.Core.Investments
+@inject ILedgerStore Store
+@inject ExchangeRateFeed Feed
+@inject QuoteFeed Prices
+@inject ILogger<Holdings> Logger
+
+<PageTitle>Holdings · LoonieBooks</PageTitle>
+
+<h1 class="h3 mb-1">Holdings</h1>
+<p class="text-body-secondary">
+    Choose the investment account, then drop its latest monthly statement (PDF) or the holdings
+    (or positions) report from your broker's website (CSV), or copy the holdings table from the page and paste it below.
+    It's read on this device. Each import replaces the account's holdings with the new ones.
+</p>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@if (_saved is not null)
+{
+    <div class="alert alert-success d-flex flex-wrap align-items-center gap-2" role="status">
+        <span>@_saved</span>
+        <button type="button" class="btn-close ms-auto" aria-label="Dismiss" @onclick="() => _saved = null"></button>
+    </div>
+}
+
+@if (_accounts is null)
+{
+    <p class="text-body-secondary">Loading…</p>
+}
+else if (_investments.Count == 0)
+{
+    <p>
+        No investment accounts yet. <a href="accounts">Add one</a> (type <em>Investment</em>) for each RRSP, TFSA, FHSA or
+        non-registered account, then import its holdings here.
+    </p>
+}
+else
+{
+    <div class="row g-3 mb-3">
+        <div class="col-md-4">
+            <label class="form-label" for="holdings-account">Account</label>
+            <select id="holdings-account" class="form-select" @bind="_accountId" @bind:after="AccountChanged">
+                @foreach (var account in _investments)
+                {
+                    <option value="@account.AccountId">@account.DisplayName@(account.InstitutionName is null ? "" : $" ({account.InstitutionName})")</option>
+                }
+            </select>
+        </div>
+        <div class="col-md-3 col-lg-2">
+            <div class="form-label">Account currency</div>
+            <div class="form-control-plaintext">
+                <a href="accounts" title="For holdings that don't state a currency. Click to change it on Accounts.">@AccountCurrency</a>
+            </div>
+        </div>
+        @foreach (var currency in RateCurrencies())
+        {
+            var rate = _rates.GetValueOrDefault(currency);
+            <div class="col-md-5 col-lg-4">
+                <label class="form-label" for="rate-@currency">Exchange rate</label>
+                <div class="input-group flex-nowrap">
+                    <span class="input-group-text">1 @currency =</span>
+                    <input id="rate-@currency" type="number" step="0.0001" min="0" class="form-control" style="min-width: 5.5rem"
+                           value="@(rate?.Rate.ToString("0.0000####", CultureInfo.InvariantCulture))" @onchange="e => RateChangedAsync(currency, (string?)e.Value)" />
+                    <span class="input-group-text">CAD</span>
+                </div>
+                <div class="form-text">
+                    @if (rate is null)
+                    {
+                        <span>@(_fetchingRates ? "Getting the Bank of Canada's rate…" : "Enter the rate, or get the Bank of Canada's.")</span>
+                    }
+                    else if (rate.Source == ExchangeRateSource.BankOfCanada)
+                    {
+                        <span>Bank of Canada daily rate for @Display.Date(rate.AsOf).</span>
+                    }
+                    else
+                    {
+                        <span>Entered @Display.Date(rate.AsOf).</span>
+                    }
+                    @if (!_fetchingRates)
+                    {
+                        <button type="button" class="btn btn-link btn-sm p-0 ms-1 align-baseline" @onclick="() => RefreshRatesAsync(force: true)">Get the latest</button>
+                    }
+                    @if (_rateFetchFailed && !_fetchingRates)
+                    {
+                        <div class="text-warning-emphasis">Couldn't reach the Bank of Canada. @(rate is null ? "Enter the rate yourself." : "Using the rate above.")</div>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="mb-3">
+        <div class="form-label">Statement or holdings file (PDF or CSV)</div>
+        @* The file input covers the whole zone, so a drop anywhere on it lands in the input. *@
+        <label class="file-drop @(_draggingFiles ? "file-drop-active" : "") @(_readingFile ? "file-drop-disabled" : "")"
+               @ondragenter="() => _draggingFiles = true" @ondragleave="() => _draggingFiles = false" @ondrop="() => _draggingFiles = false">
+            <InputFile id="holdings-file" accept="@Accept" OnChange="FileChosenAsync" disabled="@_readingFile" />
+            <svg class="file-drop-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3v12m0 0-4.5-4.5M12 15l4.5-4.5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <span><b>Drag the statement or holdings file here</b>, or <span class="file-drop-browse">browse</span></span>
+            <span class="small text-body-secondary">A monthly statement (PDF) or a holdings report (CSV)</span>
+        </label>
+        <div class="form-text">
+            From a statement, the holdings section is read and the account activity is left out. Scanned PDF statements (images)
+            can't be read.
+        </div>
+        @if (_readingFile)
+        {
+            <p class="small text-body-secondary mt-2 mb-0" role="status">Reading…</p>
+        }
+        else if (_import.FileNote is not null)
+        {
+            <p class="small mt-2 mb-0" role="status">@_import.FileNote</p>
+        }
+    </div>
+
+    <div class="mb-3">
+        <label class="form-label" for="holdings-paste">Or paste the holdings table</label>
+        <textarea id="holdings-paste" class="form-control font-monospace small" rows="4" @bind="_import.Pasted"
+                  placeholder="Symbol, Description, Quantity, Price, Book value, Market value"></textarea>
+        <button type="button" class="btn btn-outline-secondary btn-sm mt-2" disabled="@string.IsNullOrWhiteSpace(_import.Pasted)" @onclick="ReadPasted">Read pasted text</button>
+    </div>
+
+    @if (_import.Table is { } table)
+    {
+        <h2 class="h5 mt-4">Columns</h2>
+        @if (!table.HasHeader)
+        {
+            <p class="small text-warning-emphasis">No header row was recognised. Pick which column holds what.</p>
+        }
+        <div class="row g-2">
+            @foreach (var field in Fields)
+            {
+                <div class="col-6 col-md-3">
+                    <label class="form-label small mb-1" for="col-@field.Key">@field.Label</label>
+                    <select id="col-@field.Key" class="form-select form-select-sm" value="@(field.Get(_import.Columns)?.ToString() ?? "")"
+                            @onchange="e => ColumnChanged(field, (string?)e.Value)">
+                        <option value="">(none)</option>
+                        @for (var i = 0; i < table.Headers.Count; i++)
+                        {
+                            <option value="@i">@Header(table, i)</option>
+                        }
+                    </select>
+                </div>
+            }
+        </div>
+
+        @if (_import.ReportAccounts.Count > 1)
+        {
+            <div class="mt-3" style="max-width: 28rem">
+                <label class="form-label" for="report-account">This report covers several accounts. Import the holdings of</label>
+                <select id="report-account" class="form-select" value="@_import.ReportAccount" @onchange="ReportAccountChanged">
+                    @foreach (var a in _import.ReportAccounts)
+                    {
+                        <option value="@a.Key">@a.Label (@a.Rows @(a.Rows == 1 ? "row" : "rows"))</option>
+                    }
+                </select>
+            </div>
+        }
+
+        <div class="row g-3 mt-1">
+            <div class="col-md-4">
+                <label class="form-label" for="holdings-asof">Holdings as of</label>
+                <input id="holdings-asof" type="date" class="form-control" value="@Display.Iso(_import.AsOf)" @onchange="AsOfChanged" />
+                @if (table.AsOf is not null)
+                {
+                    <div class="form-text">The date the report states.</div>
+                }
+            </div>
+        </div>
+
+        @if (_import.Parsed is { } parsed)
+        {
+            <h2 class="h5 mt-4">@parsed.Holdings.Count holding(s) found</h2>
+            @if (parsed.Skipped.Count > 0)
+            {
+                <details class="mb-2 small">
+                    <summary>@parsed.Skipped.Count row(s) left out (totals, titles, rows without a market value)</summary>
+                    <ul class="mb-0">
+                        @foreach (var row in parsed.Skipped.Take(50))
+                        {
+                            <li class="text-body-secondary">@row</li>
+                        }
+                    </ul>
+                </details>
+            }
+
+            @if (parsed.Holdings.Count > 0)
+            {
+                <HoldingsTableView Holdings="WithRates(parsed.Holdings)" />
+
+                <div class="form-check mt-2">
+                    <input id="set-balance" class="form-check-input" type="checkbox" @bind="_import.SetBalance" />
+                    <label class="form-check-label" for="set-balance">
+                        Set the account balance to @(!MissingRate && TotalInAccountCurrency(WithRates(parsed.Holdings)) is { } total ? Money.Format(total, AccountCurrency) : "the total") as of @Display.Date(_import.AsOf)
+                    </label>
+                </div>
+            }
+        }
+
+        <div class="mt-3 d-flex gap-2">
+            <button class="btn btn-primary" disabled="@(!CanSave)" @onclick="SaveAsync">Save holdings to @AccountName(_accountId)</button>
+            <button class="btn btn-outline-secondary" @onclick="StartOver">Start over</button>
+        </div>
+        @if (MissingRate)
+        {
+            <div class="form-text">Enter the exchange rate above for @string.Join(" and ", ForeignCurrencies().Where(c => !_rates.ContainsKey(c))) to save.</div>
+        }
+    }
+
+    @if (_investments.FirstOrDefault(a => a.AccountId == _accountId) is { } selected)
+    {
+        var snapshot = _snapshots.FirstOrDefault(s => s.AccountId == selected.AccountId);
+        <section class="mt-5 mb-4">
+            <div class="d-flex flex-wrap align-items-baseline gap-2 mb-3">
+                <h2 class="h4 mb-0">Holdings in @selected.DisplayName</h2>
+                @if (snapshot is not null)
+                {
+                    <span class="text-body-secondary">from the statement of @Display.Date(snapshot.AsOf)</span>
+                    <span class="ms-auto">
+                        @if (_confirmClear == selected.AccountId)
+                        {
+                            <button class="btn btn-sm btn-danger" @onclick="() => ClearAsync(selected.AccountId)">Clear these holdings</button>
+                        }
+                        else
+                        {
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmClear = selected.AccountId">Clear</button>
+                        }
+                    </span>
+                }
+            </div>
+            @if (snapshot is null)
+            {
+                <p class="text-body-secondary small">No holdings imported. The account's balance is @(selected.CurrentBalance is { } b ? Money.Format(b, AccountCurrency) : "not set").</p>
+            }
+            else
+            {
+                <div class="row g-3 mb-3">
+                    <div class="col-sm-4"><StatTile Label="Market value" Value="@Money.Format(snapshot.MarketValueCad)" /></div>
+                    @if (snapshot.HasBookValues)
+                    {
+                        <div class="col-sm-4"><StatTile Label="Book value" Value="@Money.Format(snapshot.BookValueCad)" /></div>
+                        <div class="col-sm-4"><StatTile Label="Gain over book value" Value="@Money.FormatSigned(snapshot.GainCad)" Detail="@GainPercent(snapshot)" /></div>
+                    }
+                </div>
+                @if (selected.CurrentBalance is { } balance && TotalInAccountCurrency(snapshot.Holdings) is { } holdingsTotal && Math.Abs(balance - holdingsTotal) >= 1)
+                {
+                    <p class="small text-body-secondary mb-2">
+                        The account balance (@Money.Format(balance, AccountCurrency)@(selected.BalanceAsOf is { } at ? $" as of {Display.Date(DateOnly.FromDateTime(at.Date))}" : "")) differs from these holdings' total.
+                    </p>
+                }
+                <HoldingsTableView Holdings="snapshot.Holdings" ShowShare="true" />
+                <PriceStatus Refresh="_prices" Fetching="_fetchingPrices" Enabled="Prices.Enabled" AccountId="@selected.AccountId"
+                             OnRefresh="() => RefreshPricesAsync(force: true)" />
+            }
+        </section>
+    }
+
+    <p class="small text-body-secondary">
+        Book value and gains are as your broker reports them, for keeping track; they aren't adjusted cost base for
+        capital gains and aren't tax or investment advice. Holdings in other currencies are valued in Canadian dollars at the exchange
+        rate above, from the Bank of Canada unless you enter your own; a new rate revalues them, and the account balance with them.
+        @if (Prices.Enabled)
+        {
+            <span>Listed stocks and ETFs are priced from stocktreemap.com, which can be up to two hours behind the market; nothing about your holdings is sent to get them.</span>
+        }
+    </p>
+}
+
+@code {
+    [SupplyParameterFromQuery(Name = "accountId")] public string? RequestedAccountId { get; set; }
+
+    private const long MaxCsvBytes = 5 * 1024 * 1024;
+    private const long MaxPdfBytes = 25 * 1024 * 1024;
+    private const string Accept = ".pdf,application/pdf,.csv,text/csv,.txt,text/plain";
+
+    private IReadOnlyList<Account>? _accounts;
+    private List<Account> _investments = [];
+    private IReadOnlyList<HoldingsSnapshot> _snapshots = [];
+    private Dictionary<string, ExchangeRate> _rates = [];
+    private bool _fetchingRates;
+    private bool _rateFetchFailed;
+    private QuoteRefresh? _prices;
+    private bool _fetchingPrices;
+    private string _accountId = "";
+    private ImportState _import = new();
+    private string? _confirmClear;
+    private string? _error;
+    private string? _saved;
+    private bool _busy;
+    private bool _draggingFiles;
+    private bool _readingFile;
+
+    private sealed record ColumnField(string Key, string Label, Func<HoldingColumns, int?> Get, Func<HoldingColumns, int?, HoldingColumns> Set);
+
+    private static readonly ColumnField[] Fields =
+    [
+        new("symbol", "Symbol", c => c.Symbol, (c, v) => c with { Symbol = v }),
+        new("description", "Description", c => c.Description, (c, v) => c with { Description = v }),
+        new("quantity", "Quantity", c => c.Quantity, (c, v) => c with { Quantity = v }),
+        new("price", "Price", c => c.Price, (c, v) => c with { Price = v }),
+        new("market", "Market value", c => c.MarketValue, (c, v) => c with { MarketValue = v }),
+        new("book", "Book value", c => c.BookValue, (c, v) => c with { BookValue = v }),
+        new("currency", "Currency", c => c.Currency, (c, v) => c with { Currency = v }),
+        new("account", "Account", c => c.Account, (c, v) => c with { Account = v }),
+    ];
+
+    /// <summary>What has been read for the import: the file or pasted text, the columns, and the date and rates.</summary>
+    private sealed class ImportState
+    {
+        public string? Pasted { get; set; }
+        public HoldingsTable? Table { get; set; }
+        public HoldingColumns Columns { get; set; } = new();
+        public IReadOnlyList<HoldingsAccount> ReportAccounts { get; set; } = [];
+        public string? ReportAccount { get; set; }
+        public HoldingsParseResult? Parsed { get; set; }
+        public DateOnly AsOf { get; set; } = Periods.Today;
+        public bool SetBalance { get; set; } = true;
+        public string? FileNote { get; set; }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+        _accountId = _investments.FirstOrDefault(a => a.AccountId == RequestedAccountId)?.AccountId ?? _investments.FirstOrDefault()?.AccountId ?? "";
+        if (_investments.Count == 0) return;
+
+        // Show the page, then bring the rates and prices up to date (revaluing the holdings if one changed).
+        StateHasChanged();
+        await RefreshRatesAsync(force: false);
+        StateHasChanged();
+        await RefreshPricesAsync(force: false);
+    }
+
+    private async Task RefreshPricesAsync(bool force)
+    {
+        if (!Prices.Enabled || _snapshots.Count == 0) return;
+
+        _fetchingPrices = true;
+        try
+        {
+            _prices = await Prices.RefreshAsync(force);
+            // Asked for (Refresh prices, or after stocktreemap.com added listings, whose prices were saved
+            // before the feed carries them): reload whatever the feed changed.
+            if (force || _prices.Applied.Repriced > 0) await LoadAsync();
+        }
+        finally
+        {
+            _fetchingPrices = false;
+        }
+    }
+
+    private async Task RefreshRatesAsync(bool force)
+    {
+        _fetchingRates = true;
+        try
+        {
+            var before = _rates.Values.ToList();
+            var (rates, failed) = await Feed.RefreshAsync(RateCurrencies(), before, force);
+            _rateFetchFailed = failed;
+            _rates = rates.ToDictionary(r => r.Currency);
+            if (!rates.SequenceEqual(before.OrderBy(r => r.Currency, StringComparer.Ordinal))) await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't save the exchange rate: {ex.Message}";
+        }
+        finally
+        {
+            _fetchingRates = false;
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _accounts = await Store.GetAccountsAsync();
+            _investments = _accounts.Where(a => a.AccountCategory == AccountCategory.InvestmentAccount).ToList();
+            _snapshots = await Store.GetHoldingsAsync();
+            _rates = (await Store.GetExchangeRatesAsync()).ToDictionary(r => r.Currency);
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't load holdings: {ex.Message}";
+        }
+    }
+
+    private void StartOver()
+    {
+        _import = new ImportState();
+        _error = null;
+    }
+
+    private async Task FileChosenAsync(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        _saved = null;
+        _import.FileNote = null;
+        var pdf = Path.GetExtension(e.File.Name).Equals(".pdf", StringComparison.OrdinalIgnoreCase);
+        var limit = pdf ? MaxPdfBytes : MaxCsvBytes;
+        if (e.File.Size > limit)
+        {
+            _error = $"{e.File.Name} is larger than {limit / 1024 / 1024} MB.";
+            return;
+        }
+
+        _readingFile = true;
+        try
+        {
+            using var buffer = new MemoryStream();
+            await using (var stream = e.File.OpenReadStream(limit))
+            {
+                await stream.CopyToAsync(buffer);
+            }
+
+            if (!pdf)
+            {
+                Load(HoldingsReader.ReadFile(buffer.ToArray()));
+                _import.FileNote = $"Read {e.File.Name}. Check the holdings below, and that each column is the right one.";
+                return;
+            }
+
+            // Reading runs on the browser's only thread; let "Reading…" render first.
+            StateHasChanged();
+            await Task.Delay(1);
+            var result = HoldingsPdfReader.Read(new StatementFile(e.File.Name, buffer.ToArray()));
+            if (!result.HasText)
+            {
+                _error = $"No text found in {e.File.Name}. It looks like a scanned image, which can't be read.";
+            }
+            else if (result.Table is null)
+            {
+                _error = $"Didn't find a holdings table in {e.File.Name}. Download the holdings report as CSV from your broker's website, or copy the holdings table from the page and paste it below.";
+            }
+            else
+            {
+                Load(result.Table);
+                _import.FileNote = $"Read {result.PageCount} page(s) from {e.File.Name}. Check the holdings below, and that each column is the right one.";
+            }
+        }
+        catch (PdfStatementException ex)
+        {
+            _error = ex.Message;
+            if (ex.InnerException is { } cause) Logger.LogWarning(cause, "Couldn't read a statement file: {Message}", ex.Message);
+        }
+        catch (IOException ex)
+        {
+            _error = $"Couldn't read {e.File.Name}: {ex.Message}";
+        }
+        finally
+        {
+            _readingFile = false;
+        }
+    }
+
+    private void ReadPasted()
+    {
+        _error = null;
+        _saved = null;
+        _import.FileNote = null;
+        Load(HoldingsReader.ReadText(_import.Pasted ?? ""));
+    }
+
+    private void Load(HoldingsTable table)
+    {
+        _import.Table = table;
+        _import.Columns = table.HasHeader ? HoldingsReader.Guess(table.Headers) : new HoldingColumns();
+        if (table.AsOf is { } asOf && asOf <= Periods.Today) _import.AsOf = asOf;
+        RefreshAccounts();
+        Parse();
+    }
+
+    private void RefreshAccounts()
+    {
+        _import.ReportAccounts = HoldingsReader.Accounts(_import.Table!, _import.Columns);
+        if (_import.ReportAccounts.All(a => a.Key != _import.ReportAccount)) _import.ReportAccount = _import.ReportAccounts.FirstOrDefault()?.Key;
+    }
+
+    private void Parse() =>
+        _import.Parsed = HoldingsReader.Parse(_import.Table!, _import.Columns, _import.ReportAccounts.Count > 1 ? _import.ReportAccount : null, AccountCurrency);
+
+    private string AccountCurrency => _investments.FirstOrDefault(a => a.AccountId == _accountId)?.Currency.CurrencyCode ?? Holding.Cad;
+
+    private void AccountChanged()
+    {
+        _confirmClear = null;
+        if (_import.Table is not null) Parse();
+    }
+
+    /// <summary>What holdings come to in the account's currency (its balance's), or null without the rate for it.</summary>
+    private decimal? TotalInAccountCurrency(IEnumerable<Holding> holdings) =>
+        Holding.TotalIn(holdings, AccountCurrency, AccountCurrency == Holding.Cad ? 1m : _rates.GetValueOrDefault(AccountCurrency)?.Rate);
+
+    private async Task RateChangedAsync(string currency, string? value)
+    {
+        _error = null;
+        if (!decimal.TryParse(value, NumberStyles.Number, CultureInfo.InvariantCulture, out var rate) || rate <= 0 || rate > ExchangeRate.MaxRate)
+        {
+            _error = $"Enter how many Canadian dollars 1 {currency} is worth, such as 1.38.";
+            return;
+        }
+
+        try
+        {
+            _rates[currency] = await Store.SetExchangeRateAsync(new ExchangeRate(currency, rate, Periods.Today, ExchangeRateSource.Entered));
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    /// <summary>The currencies to show a rate for: US dollars, and any other the holdings are in.</summary>
+    private IEnumerable<string> RateCurrencies() =>
+        new[] { ExchangeRate.Usd }
+            .Concat(_investments.Select(a => a.Currency.CurrencyCode))
+            .Concat(_snapshots.SelectMany(s => s.Holdings).Select(h => h.Currency))
+            .Concat(ForeignCurrencies())
+            .Where(c => c != Holding.Cad)
+            .Distinct()
+            .Order(StringComparer.Ordinal);
+
+    private static string? GainPercent(HoldingsSnapshot snapshot) =>
+        snapshot.BookValueCad > 0 ? (snapshot.GainCad / snapshot.BookValueCad).ToString("+0.0%;-0.0%", CultureInfo.InvariantCulture) : null;
+
+    private void ColumnChanged(ColumnField field, string? value)
+    {
+        var column = int.TryParse(value, CultureInfo.InvariantCulture, out var i) ? i : (int?)null;
+        _import.Columns = field.Set(_import.Columns, column);
+        if (field.Key == "account") RefreshAccounts();
+        Parse();
+    }
+
+    private void ReportAccountChanged(ChangeEventArgs e)
+    {
+        _import.ReportAccount = (string?)e.Value;
+        Parse();
+    }
+
+    private void AsOfChanged(ChangeEventArgs e)
+    {
+        if (Display.TryParseIso((string?)e.Value, out var date)) _import.AsOf = date;
+    }
+
+    private IEnumerable<string> ForeignCurrencies() =>
+        _import.Parsed?.Holdings.Select(h => h.Currency).Where(c => c != Holding.Cad).Distinct().Order() ?? Enumerable.Empty<string>();
+
+    private bool MissingRate => ForeignCurrencies().Any(c => !_rates.ContainsKey(c));
+
+    private bool CanSave => !_busy && _accountId.Length > 0 && _import.Parsed is { Holdings.Count: > 0 } && !MissingRate;
+
+    private string AccountName(string accountId) => _investments.FirstOrDefault(a => a.AccountId == accountId)?.DisplayName ?? "the account";
+
+    /// <summary>The holdings at the ledger's exchange rates (1 until there is one, for the preview).</summary>
+    private IReadOnlyList<Holding> WithRates(IReadOnlyList<Holding> holdings) =>
+        holdings.Select(h => h.Currency == Holding.Cad ? h : h with { ExchangeRate = _rates.GetValueOrDefault(h.Currency)?.Rate ?? 1m }).ToList();
+
+    private async Task SaveAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            var result = await Store.ImportHoldingsAsync(_accountId, new ImportHoldingsRequest(_import.AsOf, WithRates(_import.Parsed!.Holdings), _import.SetBalance));
+            _saved = $"Saved {result.Snapshot.Holdings.Count} holding(s) in {AccountName(_accountId)}, worth {Money.Format(result.Snapshot.MarketValueCad)}."
+                + (_import.SetBalance && !result.BalanceUpdated ? " The balance wasn't changed: it's from a later date." : "");
+            _import = new ImportState();
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+
+        // Bring the new holdings up to today's prices, where the statement is older than the feed.
+        await RefreshPricesAsync(force: false);
+    }
+
+    private async Task ClearAsync(string accountId)
+    {
+        try
+        {
+            await Store.DeleteHoldingsAsync(accountId);
+            _confirmClear = null;
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private static string Header(HoldingsTable table, int i)
+    {
+        var name = table.Headers[i].Length > 0 ? table.Headers[i] : $"Column {i + 1}";
+        var sample = table.Rows.Select(r => i < r.Length ? r[i] : "").FirstOrDefault(c => c.Length > 0);
+        return table.HasHeader || sample is null ? name : $"{name}: {(sample.Length > 24 ? sample[..24] + "…" : sample)}";
+    }
+}
