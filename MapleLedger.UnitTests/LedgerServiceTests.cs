@@ -1625,4 +1625,56 @@ public sealed class LedgerServiceTests : IDisposable
         await Assert.ThrowsAsync<LedgerValidationException>(() => For("alice").UpdateAccountAsync(account.AccountId, Tfsa("IBKR") with { CurrencyCode = "EUR" }));
         Assert.Equal("CAD", (await For("alice").FindAccountAsync(account.AccountId))!.Currency.CurrencyCode);
     }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-321)]   // a different month and day of the week
+    public async Task TheSampleHouseholdLoadsAsAYearOfRecentActivity(int daysAgo)
+    {
+        // Holdings can't be dated in the future, so "today" is never later than the real one.
+        var today = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(daysAgo);
+        var categorizer = new Core.Categorization.TransactionCategorizer();
+        var suggester = new TaxSuggester();
+        var ledger = For(LedgerDbContext.LocalOwner);
+
+        Assert.False(Core.Import.SampleHousehold.IsLoaded(await ledger.GetAccountsAsync()));
+        var all = new List<LedgerTransaction>();
+        foreach (var sample in Core.Import.SampleHousehold.Create(today))
+        {
+            var account = await ledger.CreateAccountAsync(sample.Account);
+            var transactions = Core.Import.SampleHousehold.Transactions(sample, account.AccountId, categorizer, suggester);
+            all.AddRange(transactions);
+            if (transactions.Count > 0)
+            {
+                var result = await ledger.ImportAsync(account.AccountId, new ImportTransactionsRequest(transactions, Source: "sample"));
+                Assert.Equal(transactions.Count, result!.Added); // ids are unique, so nothing is dropped as a duplicate
+            }
+
+            if (sample.Holdings.Count > 0) await ledger.ImportHoldingsAsync(account.AccountId, new(today, sample.Holdings));
+        }
+
+        var accounts = await ledger.GetAccountsAsync();
+        Assert.True(Core.Import.SampleHousehold.IsLoaded(accounts));
+        Assert.Equal(5, accounts.Count);
+        Assert.All(accounts, a => Assert.True(a.CurrentBalance > 0, $"{a.Nickname} has a balance"));
+
+        // A year of it, none of it after today, and the same household every time.
+        var dates = all.Select(t => DateOnly.FromDateTime(t.Transaction.TransactionTimestamp!.Value.UtcDateTime)).ToList();
+        Assert.True(dates.Max() <= today);
+        Assert.True(dates.Min() >= new DateOnly(today.Year, today.Month, 1).AddMonths(1 - Core.Import.SampleHousehold.Months));
+        Assert.Equal(
+            Core.Import.SampleHousehold.Create(today).SelectMany(s => s.Transactions),
+            Core.Import.SampleHousehold.Create(today).SelectMany(s => s.Transactions));
+
+        // The built-in rules know most of it, leave one merchant to categorize, and suggest tax claims.
+        Assert.Equal(["THE HOLLOW TREE CAFE"], all.Where(t => t.Transaction.Category == Categories.Uncategorized)
+            .Select(t => t.Transaction.Description![..20]).Distinct());
+        Assert.Equal(5, all.Count(t => t.Tags is { Count: > 0 }));
+        Assert.Contains(all, t => t.Transaction.Description == "SUNSHINE DAYCARE INC" && t.Tax is not null);
+        Assert.Contains(all, t => t.Transaction.Description == "BRIGHT SMILES DENTAL" && t.Tax is not null);
+
+        var dashboard = await ledger.GetDashboardAsync(today.AddMonths(-11), today);
+        Assert.True(dashboard.Income > dashboard.Expenses);
+        Assert.True(dashboard.NetWorth.NetWorth > 0);
+    }
 }

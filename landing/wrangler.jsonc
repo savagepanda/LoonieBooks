@@ -1,0 +1,16 @@
+// looniebooks.ca: a Cloudflare Worker that only serves the files in public/ (no script runs, so
+// requests are free and unlimited). Deploy with landing\deploy.ps1.
+{
+    "name": "looniebooks",
+    "compatibility_date": "2026-11-18",
+    "assets": {
+        "directory": "./public"
+    },
+    // Cloudflare makes the DNS records for these. demo.looniebooks.ca is the browser demo, on GitHub Pages.
+    "routes": [
+        { "pattern": "looniebooks.ca", "custom_domain": true },
+        { "pattern": "www.looniebooks.ca", "custom_domain": true }
+    ],
+    "workers_dev": false,
+    "preview_urls": false
+}

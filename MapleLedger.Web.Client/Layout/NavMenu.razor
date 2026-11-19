@@ -32,4 +32,11 @@
     <NavLink class="ml-nav-link" href="help">
         <span class="bi bi-question-circle-nav-menu" aria-hidden="true"></span> Help
     </NavLink>
+    @if (!SiteInfo.HasWebHost)
+    {
+        @* The browser demo: the way from trying it to installing it. *@
+        <a class="ml-nav-link" href="@SiteInfo.WindowsDownloadUrl" target="_blank" rel="noopener">
+            <span class="bi bi-download-nav-menu" aria-hidden="true"></span> Windows app
+        </a>
+    }
 </nav>

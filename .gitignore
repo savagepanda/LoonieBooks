@@ -493,3 +493,6 @@ aspire-output/
 *.db
 *.db-shm
 *.db-wal
+
+# Wrangler's cache (landing\deploy.ps1)
+.wrangler/

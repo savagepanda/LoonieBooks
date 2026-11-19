@@ -7,6 +7,18 @@
         bank or needs your banking password.
     </p>
 
+    @if (!SiteInfo.HasWebHost)
+    {
+        <h3>Just looking around?</h3>
+        <p>
+            On an empty <a href="./">Dashboard</a>, <span class="help-ui">Explore a sample household</span> fills this demo with a
+            made-up family's year: accounts, categorized spending, investments, a tagged trip and tax claims. Nothing in it is
+            real. When you'd rather use your own, delete it under <a href="data">Your data</a> with
+            <span class="help-ui">Start over</span>. To keep your ledger in a file on your PC instead of this browser,
+            <a href="@SiteInfo.WindowsDownloadUrl" target="_blank" rel="noopener">download LoonieBooks for Windows</a>.
+        </p>
+    }
+
     <h3>1. Add your accounts</h3>
     <p>
         On <a href="accounts">Accounts</a>, choose <span class="help-ui">Add account</span> for each chequing, savings, credit card,

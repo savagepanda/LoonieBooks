@@ -1,7 +1,9 @@
 @page "/"
 @using MapleLedger.Core.Investments
 @using MapleLedger.Core.RealEstate
+@using MapleLedger.Core.Import
 @inject ILedgerStore Store
+@inject SampleLedger Sample
 @inject Preferences Preferences
 @inject QuoteFeed Prices
 @inject HpiFeed Hpi
@@ -50,11 +52,44 @@ else if (_accounts.Count == 0)
             }
             <a class="btn btn-primary me-2" href="accounts">Add an account</a>
             <a class="btn btn-outline-secondary" href="import">Import transactions</a>
+            @if (!SiteInfo.HasWebHost)
+            {
+                @* The browser demo: something to look at without typing anything in, and the way to the app. *@
+                <hr />
+                <p class="mb-2"><strong>Just looking around?</strong> Fill this demo with a made-up household: a year of a Toronto family's
+                    spending, savings, investments and tax claims, ready to explore.</p>
+                <button class="btn btn-outline-primary" @onclick="LoadSampleAsync" disabled="@_loadingSample">
+                    @(_loadingSample ? "Adding the sample household…" : "Explore a sample household")
+                </button>
+                @if (_sampleError is not null)
+                {
+                    <div class="alert alert-danger mt-3 mb-0">@_sampleError</div>
+                }
+                <p class="small text-body-secondary mt-3 mb-0">
+                    Prefer an app? <a href="@SiteInfo.WindowsDownloadUrl" target="_blank" rel="noopener">Download LoonieBooks for Windows</a>:
+                    free, and your ledger stays in a file on your PC.
+                </p>
+            }
         </div>
     </div>
 }
 else
 {
+    @if (_sampleError is not null)
+    {
+        <div class="alert alert-danger">@_sampleError</div>
+    }
+    @if (!SiteInfo.HasWebHost && SampleHousehold.IsLoaded(_accounts))
+    {
+        <div class="alert alert-info d-flex flex-wrap align-items-center gap-2 py-2">
+            <span>
+                This is a made-up household. Try anything: categorize the café on <a href="transactions">Transactions</a>,
+                open the <a href="tax">Tax report</a>, filter by the Vacation tag. To use your own, delete it under
+                <a href="data">Your data</a>, Start over.
+            </span>
+            <a class="btn btn-sm btn-outline-primary ms-auto" href="@SiteInfo.WindowsDownloadUrl" target="_blank" rel="noopener">Get the Windows app</a>
+        </div>
+    }
     <DuplicatesNotice />
     <div class="row g-3 mb-3">
         <div class="col-6 col-lg-3"><StatTile Label="Income" Value="@Money.FormatWhole(_summary.Income)" Detail="@_period.Label" /></div>
@@ -1027,7 +1062,12 @@ else
             // The dashboard is already showing; the values are by the index as last saved.
         }
 
-        // Then today's prices for the holdings, so net worth is current, and reload if any moved.
+        await RefreshPricesAsync();
+    }
+
+    /// <summary>Today's prices for the holdings, so net worth is current; reloads if any moved.</summary>
+    private async Task RefreshPricesAsync()
+    {
         try
         {
             if (!Prices.Enabled) return;
@@ -1041,6 +1081,30 @@ else
         {
             // The dashboard is already showing; the prices are as last saved.
         }
+    }
+
+    private bool _loadingSample;
+    private string? _sampleError;
+
+    /// <summary>The demo's "Explore a sample household": fills the empty ledger, then shows it.</summary>
+    private async Task LoadSampleAsync()
+    {
+        (_loadingSample, _sampleError) = (true, null);
+        try
+        {
+            await Sample.LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _sampleError = $"Couldn't add all of the sample household: {ex.Message} Start over under Your data to clear what was added.";
+        }
+        finally
+        {
+            _loadingSample = false;
+        }
+
+        await (_breakdown == Breakdown.Assets ? Task.WhenAll(LoadAsync(), LoadHoldingsAsync()) : LoadAsync());
+        await RefreshPricesAsync();
     }
 
     private Task ChangeTagsAsync(IReadOnlyList<string> tagIds)

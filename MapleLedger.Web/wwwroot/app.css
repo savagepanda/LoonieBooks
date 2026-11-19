@@ -724,6 +724,7 @@ button.category-toggle:hover { color: var(--bs-body-color); }
 .help-card.is-open .help-card-chevron { transform: rotate(225deg); margin-top: 0.25rem; }
 .help-card-body { border-top: 1px solid var(--bs-border-color); }
 .help-go { margin: 1rem 0 0; font-weight: 500; }
+.help-community { margin: 1.5rem 0 0; font-size: 0.875rem; color: var(--bs-secondary-color); }
 
 /* Article text, on the help page and in the help dialog. */
 .help-article { line-height: 1.55; }

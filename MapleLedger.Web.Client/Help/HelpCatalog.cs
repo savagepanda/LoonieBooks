@@ -40,9 +40,9 @@ public static class HelpCatalog
             typeof(GettingStartedArticle)),
 
         new("using-help", "Using help", CategoryGettingStarted, "help",
-            "Searching these articles, and opening the one for the page you're on from the ? button.",
+            "Searching these articles, opening the one for the page you're on from the ? button, and where to ask.",
             "/help", "the help page",
-            ["help", "search", "guide", "question", "support", "faq", "button"],
+            ["help", "search", "guide", "question", "support", "faq", "button", "reddit", "news", "release", "community", "bug", "issue", "github"],
             typeof(UsingHelpArticle)),
 
         new("accounts", "Accounts", CategoryImporting, "bank",

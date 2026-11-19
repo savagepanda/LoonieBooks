@@ -12,8 +12,9 @@ your data in by **copying transactions from your bank's website and pasting them
 
 ## Try it
 
-- **In your browser**, on any computer: [looniebooks.ca](https://looniebooks.ca/).
-  Nothing to install and no account. Your ledger stays in that browser (see
+- **In your browser**, on any computer: [demo.looniebooks.ca](https://demo.looniebooks.ca/).
+  Nothing to install and no account. *Explore a sample household* fills it with a made-up family's year to look
+  around in, or start your own: your ledger stays in that browser (see
   [Where your data lives](#where-your-data-lives)); back it up from *Your data*.
 - **On Windows**: download `LoonieBooks.zip` from the
   [latest release](https://github.com/savagepanda/LoonieBooks/releases/latest), unzip it anywhere and
@@ -25,7 +26,8 @@ your data in by **copying transactions from your bank's website and pasting them
   download, run `Get-FileHash LoonieBooks.zip` in PowerShell and compare.
 
 LoonieBooks is a record-keeping aid with CRA line references, not tax or financial advice, and it
-comes with no warranty (see [License](#license)). Found a problem? [Open an issue](https://github.com/savagepanda/LoonieBooks/issues);
+comes with no warranty (see [License](#license)). Release news, what's coming and questions:
+[r/looniebooks](https://www.reddit.com/r/looniebooks/) on Reddit. Found a problem? [Open an issue](https://github.com/savagepanda/LoonieBooks/issues);
 for security problems, see [SECURITY.md](SECURITY.md).
 
 ## Where your data lives
@@ -465,6 +467,15 @@ site when they aren't signed in: the host only serves files and never sees a led
 sign-in or server storage, and the parts that need the web host (*Send from phone*, option prices)
 are left out (`SiteInfo.HasWebHost`). Whoever controls the host controls the code browsers run, so
 publish it only somewhere you trust.
+
+The static site also offers *Explore a sample household* on an empty dashboard (`SampleHousehold`)
+and links to the Windows download. The project's own copy, built by `.github/workflows/pages.yml`,
+is the demo at [demo.looniebooks.ca](https://demo.looniebooks.ca/).
+
+## Website
+
+`landing\` is [looniebooks.ca](https://looniebooks.ca/): one static page about the project, served by
+Cloudflare. `pwsh landing\deploy.ps1` publishes it (with Node.js and a signed-in `wrangler`).
 
 ## License
 

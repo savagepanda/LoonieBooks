@@ -14,4 +14,7 @@ public static class SiteInfo
 #else
         true;
 #endif
+
+    /// <summary>The latest Windows download, offered by the static site (the browser demo).</summary>
+    public const string WindowsDownloadUrl = "https://github.com/savagepanda/LoonieBooks/releases/latest";
 }
