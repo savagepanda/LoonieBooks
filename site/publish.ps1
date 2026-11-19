@@ -62,7 +62,36 @@ Get-ChildItem -LiteralPath $Out -Recurse -File -Include *.br, *.gz |
     Remove-Item
 Remove-Item -LiteralPath (Join-Path $Out 'appsettings.Development.json') -ErrorAction SilentlyContinue
 
-$page = (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'index.html') -Raw).Replace('<base href="/" />', "<base href=`"$BaseHref`" />")
+# The page as the build wrote it: site\index.html with each file's fingerprinted name and the import map.
+$built = Join-Path $Out 'index.html'
+if ((Get-Content -LiteralPath $built -Raw) -match '#\[') { throw "The build didn't fill in index.html's placeholders." }
+$page = (Get-Content -LiteralPath $built -Raw).Replace('<base href="/" />', "<base href=`"$BaseHref`" />")
+
+# The build fingerprints only _framework. The app's own scripts (imported by name, as ./js/x.js) and the
+# stylesheets change from build to build too, so each also gets a copy named by its content, which the
+# import map and the page point to. A browser can then never use one of the last build's copies with this
+# build's page. (Packages' files, lib/ and _content/, change only when they're upgraded.)
+function Add-Fingerprint([string]$Relative) {
+    $hash = (Get-FileHash -LiteralPath (Join-Path $Out $Relative) -Algorithm SHA256).Hash.Substring(0, 10).ToLowerInvariant()
+    $extension = [IO.Path]::GetExtension($Relative)
+    $named = $Relative.Substring(0, $Relative.Length - $extension.Length) + ".$hash$extension"
+    Copy-Item -LiteralPath (Join-Path $Out $Relative) -Destination (Join-Path $Out $named)
+    return $named
+}
+
+foreach ($css in 'app.css', 'MapleLedger.Web.Client.styles.css') {
+    $named = Add-Fingerprint $css
+    if (-not $page.Contains("href=`"$css`"")) { throw "index.html doesn't link $css." }
+    $page = $page.Replace("href=`"$css`"", "href=`"$named`"")
+}
+
+$mapMatch = [regex]::Match($page, '(?s)<script type="importmap">(.*?)</script>')
+if (-not $mapMatch.Success) { throw "index.html has no import map." }
+$map = $mapMatch.Groups[1].Value | ConvertFrom-Json -AsHashtable
+foreach ($script in Get-ChildItem -LiteralPath (Join-Path $Out 'js') -Filter *.js -File) {
+    $map.imports["./js/$($script.Name)"] = './' + (Add-Fingerprint "js/$($script.Name)")
+}
+$page = $page.Remove($mapMatch.Groups[1].Index, $mapMatch.Groups[1].Length).Insert($mapMatch.Groups[1].Index, ($map | ConvertTo-Json -Depth 5))
 Set-Content -LiteralPath (Join-Path $Out 'index.html') -Value $page -NoNewline
 # A link straight to a page (say /transactions) isn't a file: static hosts answer it with 404.html,
 # which is the same app, and the app then shows that page.

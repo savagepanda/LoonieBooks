@@ -21,12 +21,16 @@
   </PropertyGroup>
 
   <!-- The static site (site\publish.ps1): this client on its own, served as plain files with no web host
-       (SiteInfo.HasWebHost is false). Its hand-written index.html names the framework files directly, so
-       they keep their plain names instead of fingerprinted ones that only an import map could find. -->
+       (SiteInfo.HasWebHost is false). Its page, site\index.html, is built in as wwwroot\index.html, where
+       the build fills in its placeholders: each file's fingerprinted name and the import map. A new build's
+       files get new names, so a browser holding the last build's files in its cache can't mix the two. -->
   <PropertyGroup Condition="'$(StaticSite)' == 'true'">
     <DefineConstants>$(DefineConstants);STATIC_SITE</DefineConstants>
-    <WasmFingerprintAssets>false</WasmFingerprintAssets>
+    <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
   </PropertyGroup>
+  <ItemGroup Condition="'$(StaticSite)' == 'true'">
+    <Content Include="..\site\index.html" Link="wwwroot\index.html" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.12" />

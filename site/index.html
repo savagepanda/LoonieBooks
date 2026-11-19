@@ -20,9 +20,13 @@
     <title>LoonieBooks</title>
     <link rel="stylesheet" href="lib/bootstrap/dist/css/bootstrap.min.css" />
     <link rel="stylesheet" href="app.css" />
-    <link rel="stylesheet" href="MapleLedger.Web.Client.styles.css" />
+    <!-- #[.{fingerprint}] and the empty import map are filled in by the build (OverrideHtmlAssetPlaceholders):
+         every build's own file names, so a browser never mixes a cached file of the last build with this one's. -->
+    <link rel="stylesheet" href="MapleLedger.Web.Client#[.{fingerprint}].styles.css" />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link rel="alternate icon" type="image/png" href="favicon.png" />
+    <link rel="preload" id="webassembly" />
+    <script type="importmap"></script>
     <style>
         .site-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; gap: 1rem; font-family: system-ui, sans-serif; color: #555; }
         .site-loading img { width: 64px; height: 64px; }
@@ -42,7 +46,32 @@
     <div id="blazor-error-ui">
         Something went wrong. <a href="" class="reload">Reload</a>
     </div>
-    <script src="_framework/blazor.webassembly.js"></script>
+    <script src="_framework/blazor.webassembly#[.{fingerprint}].js" autostart="false"></script>
+    <script>
+        // A browser may still have this page from before the site was updated (hosts like GitHub Pages let
+        // it keep pages for 10 minutes), naming files the update replaced. Reloading fetches the page
+        // afresh, so when starting fails, reload once; if it fails again, show the error bar. A file that
+        // won't download doesn't fail Blazor.start: it leaves an unhandled rejection and the start hangs.
+        (function () {
+            var key = 'looniebooks.startReloaded';
+            var started = false, failed = false, reloaded = false;
+            try { reloaded = sessionStorage.getItem(key) === '1'; } catch (e) { }
+            function fail(error) {
+                if (started || failed) return;
+                failed = true;
+                console.error('LoonieBooks could not start.', error);
+                var retry = !reloaded;
+                if (retry) { try { sessionStorage.setItem(key, '1'); } catch (e) { retry = false; } }
+                if (retry) location.reload();
+                else document.getElementById('blazor-error-ui').style.display = 'block';
+            }
+            window.addEventListener('unhandledrejection', function (e) { fail(e.reason); });
+            Blazor.start().then(function () {
+                started = true;
+                try { sessionStorage.removeItem(key); } catch (e) { }
+            }, fail);
+        })();
+    </script>
 </body>
 
 </html>

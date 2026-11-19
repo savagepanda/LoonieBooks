@@ -462,6 +462,12 @@ This publishes `MapleLedger.Web.Client` on its own (`-p:StaticSite=true`, in its
 folders), adds the web host's styles, icons and help clips and `site\index.html` (which stands in for
 `App.razor`), and writes the result to `artifacts\site`. Upload that folder's contents as they are.
 
+Static hosts let browsers keep files for a while (GitHub Pages: 10 minutes), so every file that changes
+between builds is named by its content: the framework's by the build (`OverrideHtmlAssetPlaceholders`
+fills in `index.html`'s `#[.{fingerprint}]` names and import map), the app's scripts and stylesheets by
+`publish.ps1`. A browser holding the last build's files can't mix them with a new build's, and if it still
+has the last build's page when that build's files are gone, the page reloads itself once.
+
 Everyone who opens the site keeps their ledger in their own browser, exactly as on any LoonieBooks
 site when they aren't signed in: the host only serves files and never sees a ledger. There's no
 sign-in or server storage, and the parts that need the web host (*Send from phone*, option prices)
