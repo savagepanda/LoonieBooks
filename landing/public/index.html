@@ -11,6 +11,7 @@
     <meta property="og:url" content="https://looniebooks.ca/" />
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link rel="alternate icon" type="image/png" href="favicon.png" />
+    <link rel="apple-touch-icon" href="apple-touch-icon.png" />
     <link rel="canonical" href="https://looniebooks.ca/" />
     <style>
         :root {
@@ -78,6 +79,11 @@
         .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
         .card h3 { margin: 0 0 6px; font-size: 1.05rem; }
         .card p { margin: 0; color: var(--muted); font-size: .95rem; }
+        .card ul { margin: 10px 0 0; padding-left: 1.2em; color: var(--muted); font-size: .95rem; }
+        .card li + li { margin-top: 6px; }
+        .card li strong { color: var(--text); }
+        .compare { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+        p.after { color: var(--muted); font-size: .95rem; margin: 20px 0 0; max-width: 720px; }
         .band { background: var(--surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
         .soon { background: var(--accent-soft); border-radius: 10px; padding: 24px; }
         .soon h2 { font-size: 1.3rem; }
@@ -169,6 +175,51 @@
                         <p>Run it with Docker for the whole household. <a href="https://github.com/savagepanda/LoonieBooks#readme">Self-hosting instructions</a> are in the README.</p>
                     </div>
                 </div>
+            </div>
+        </section>
+
+        <section id="demo-or-app">
+            <div class="wrap">
+                <h2>Browser demo or Windows app?</h2>
+                <p class="intro">
+                    The demo isn't a cut-down trial: it's the same app, and you can keep real books in it. Nothing you enter leaves
+                    your browser; the site only serves the app's files and never sees your ledger. The difference is where your
+                    ledger lives.
+                </p>
+                <div class="grid compare">
+                    <div class="card">
+                        <h3>In the browser demo</h3>
+                        <p>The ledger is stored inside that one browser, on that one device.</p>
+                        <ul>
+                            <li>Clearing the browser's <strong>site data</strong> (cookies and other site data) deletes it. Clearing only
+                                your browsing history doesn't, but it's easy to tick both. Some browsers, Safari in particular, also clear
+                                a site's data on their own if you don't visit it for a while.</li>
+                            <li>A private or incognito window, another browser or another device starts with an empty ledger, and a
+                                private window's ledger is gone when you close it.</li>
+                            <li>So if you keep anything real there, use <strong>Your data › Download backup</strong> regularly. A backup
+                                is one file you can restore into the demo or into the Windows app later; restoring adds what's missing
+                                and never deletes.</li>
+                        </ul>
+                    </div>
+                    <div class="card">
+                        <h3>In the Windows app</h3>
+                        <p>The ledger is a file on your PC, so clearing a browser can't touch it, and every browser on that PC sees the same ledger. It also does things a website on its own can't:</p>
+                        <ul>
+                            <li><strong>Share with your household.</strong> Turn on sharing and the phones, tablets and other computers on
+                                your home Wi-Fi open the same ledger in their browser, after entering a household passcode. It's over
+                                HTTPS, and nothing leaves your network.</li>
+                            <li><strong>Send from phone.</strong> On <em>Import</em> or <em>Scan receipt</em>, scan the QR code: your
+                                phone photographs a receipt or a paper statement and sends it straight to the PC, where it's read. Your
+                                phone needs to be on the same Wi-Fi. (The demo can still use the camera of the device it's open on.)</li>
+                            <li><strong>Option prices</strong> for investment accounts that hold options.</li>
+                        </ul>
+                    </div>
+                </div>
+                <p class="after">
+                    <a href="https://demo.looniebooks.ca/">Try the demo</a> or
+                    <a href="https://github.com/savagepanda/LoonieBooks/releases/latest">download for Windows</a>. It's the same
+                    ledger format, so you can start in one and move to the other with a backup.
+                </p>
             </div>
         </section>
 

@@ -36,7 +36,7 @@ public static class HelpCatalog
         new("getting-started", "Getting started", CategoryGettingStarted, "start",
             "The first half hour: add your accounts, bring in their transactions, sort them out, then use them.",
             "/", "the dashboard",
-            ["start", "first", "new", "begin", "setup", "set up", "welcome", "overview", "tour", "how to", "workflow"],
+            ["start", "first", "new", "begin", "setup", "set up", "welcome", "overview", "tour", "how to", "workflow", "demo", "sample", "trial"],
             typeof(GettingStartedArticle)),
 
         new("using-help", "Using help", CategoryGettingStarted, "help",
