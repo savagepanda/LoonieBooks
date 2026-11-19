@@ -12,7 +12,7 @@ your data in by **copying transactions from your bank's website and pasting them
 
 ## Try it
 
-- **In your browser**, on any computer: [savagepanda.github.io/LoonieBooks](https://savagepanda.github.io/LoonieBooks/).
+- **In your browser**, on any computer: [looniebooks.ca](https://looniebooks.ca/).
   Nothing to install and no account. Your ledger stays in that browser (see
   [Where your data lives](#where-your-data-lives)); back it up from *Your data*.
 - **On Windows**: download `LoonieBooks.zip` from the

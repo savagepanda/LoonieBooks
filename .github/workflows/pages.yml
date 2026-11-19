@@ -3,7 +3,8 @@
 # Actions tab to redeploy without a release.
 #
 # Settings > Pages > Source must be "GitHub Actions". The site is served under /<repo>/ on github.io;
-# with a custom domain (looniebooks.ca), set the repository variable SITE_BASE_HREF to /.
+# with a custom domain, set the repository variable SITE_BASE_HREF to /. The public repo serves it at
+# looniebooks.ca (Pages custom domain; the DNS is on Cloudflare, unproxied, pointing at GitHub Pages).
 name: Browser demo
 
 on:
