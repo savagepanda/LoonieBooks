@@ -1,11 +1,12 @@
 using MapleLedger.Core;
+using MapleLedger.Core.Budgets;
 using MapleLedger.Core.Categorization;
 using MapleLedger.Core.Import;
 using MapleLedger.Core.Tax;
 
 namespace MapleLedger.Web.Client.Services;
 
-/// <summary>Fills an empty ledger with the made-up <see cref="SampleHousehold"/>, for the browser demo.</summary>
+/// <summary>Fills an empty ledger with the made-up <see cref="SampleHousehold"/>, and a budget for this year, for the browser demo.</summary>
 public sealed class SampleLedger(ILedgerStore store, TransactionCategorizer categorizer, TaxSuggester taxSuggester)
 {
     public async Task LoadAsync()
@@ -25,6 +26,14 @@ public sealed class SampleLedger(ILedgerStore store, TransactionCategorizer cate
             {
                 await store.ImportHoldingsAsync(account.AccountId, new(today, sample.Holdings));
             }
+        }
+
+        // This year's budget from the household's own spending, as "Use suggestions" sets it, so the
+        // Budget page and the dashboard's budget charts have something to show.
+        var plan = await store.GetBudgetPlanAsync(today.Year);
+        if (BudgetCalculator.SuggestedLines(plan) is { Count: > 0 } lines)
+        {
+            await store.SetBudgetAsync(today.Year, new SetBudgetRequest(lines));
         }
     }
 }

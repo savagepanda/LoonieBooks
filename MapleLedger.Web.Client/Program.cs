@@ -44,7 +44,6 @@ builder.Services.AddScoped<FileDownloader>();
 builder.Services.AddScoped<Preferences>();
 builder.Services.AddScoped<Camera>();
 builder.Services.AddScoped<ReceiptOcr>();
-builder.Services.AddScoped<CloudReceiptReader>();
 builder.Services.AddScoped<PhoneRelay>();
 builder.Services.AddScoped<ExchangeRateFeed>();
 builder.Services.AddScoped<QuoteFeed>();

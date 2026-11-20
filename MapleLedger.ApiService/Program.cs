@@ -1,8 +1,6 @@
 using System.Text.Json.Serialization;
-using Anthropic;
 using MapleLedger.ApiService.Data;
 using MapleLedger.ApiService.Endpoints;
-using MapleLedger.ApiService.Receipts;
 using MapleLedger.ApiService.Users;
 using MapleLedger.Data;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -53,14 +51,6 @@ builder.Services.AddScoped(sp =>
     db.OwnerId = sp.GetRequiredService<CurrentUser>().Id;
     return new LedgerService(db);
 });
-
-// Optional: reading receipts with Claude for premium users who ask for it. Without a key the
-// feature is simply unavailable and receipts are read in the browser only.
-if (builder.Configuration["Anthropic:ApiKey"] is { Length: > 0 } anthropicKey)
-{
-    builder.Services.AddSingleton(new AnthropicClient { ApiKey = anthropicKey });
-    builder.Services.AddSingleton<ClaudeReceiptReader>();
-}
 
 // Add services to the container.
 builder.Services.AddProblemDetails();

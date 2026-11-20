@@ -143,9 +143,6 @@ public sealed record ReceiptRelaySession(string UploadUrl, string PickupToken, D
 /// </summary>
 public sealed record LanPairing(string Url, DateTimeOffset ExpiresAt, string QrSvg);
 
-/// <summary>Whether the server can read receipts with Claude (an Anthropic API key is configured).</summary>
-public sealed record ReceiptReaderStatus(bool Available);
-
 /// <summary>A transaction a receipt may belong to, with why it was suggested.</summary>
 public sealed record ReceiptMatch(LedgerTransaction Item, int Score, IReadOnlyList<string> Reasons);
 

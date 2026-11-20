@@ -182,23 +182,4 @@ public class ReceiptTests
 
     [Fact]
     public void ADamagedPdfHasNoText() => Assert.Equal("", ReceiptPdf.ReadText("%PDF-1.4 not really"u8.ToArray()));
-
-    // ---------------------------------------------------------------- Claude (server)
-
-    [Fact]
-    public void ReadsClaudesStructuredOutput()
-    {
-        var fields = MapleLedger.ApiService.Receipts.ClaudeReceiptReader.Parse(
-            """{"total": 24.72, "date": "2026-02-10", "merchant": "  Pharmaprix    Peel  "}""", Today);
-
-        Assert.Equal(new ReceiptFields(24.72m, new DateOnly(2026, 2, 10), "Pharmaprix Peel"), fields);
-    }
-
-    [Theory]
-    [InlineData("""{"total": null, "date": null, "merchant": null}""")]
-    [InlineData("""{"total": 0, "date": "2027-05-01", "merchant": ""}""")]   // zero total, future date, blank name
-    [InlineData("""{"total": "12.00", "date": "10/02/2026", "merchant": 5}""")] // wrong types
-    [InlineData("not json")]
-    public void DropsAnythingImplausibleFromClaude(string json) =>
-        Assert.Equal(new ReceiptFields(null, null, null), MapleLedger.ApiService.Receipts.ClaudeReceiptReader.Parse(json, Today));
 }

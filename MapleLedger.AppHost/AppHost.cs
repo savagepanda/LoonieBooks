@@ -61,12 +61,4 @@ if (!builder.ExecutionContext.IsPublishMode && phonePort > 0)
         .WithEnvironment("ReceiptRelay__LanPort", phonePort.ToString(System.Globalization.CultureInfo.InvariantCulture));
 }
 
-// Optional: lets premium users have receipts read by Claude (each one sends the photo to
-// Anthropic's API, at the key owner's cost). Set it with
-//   dotnet user-secrets set Parameters:anthropic-api-key "sk-ant-..."
-if (!string.IsNullOrEmpty(builder.Configuration["Parameters:anthropic-api-key"]))
-{
-    api.WithEnvironment("Anthropic__ApiKey", builder.AddParameter("anthropic-api-key", secret: true));
-}
-
 builder.Build().Run();

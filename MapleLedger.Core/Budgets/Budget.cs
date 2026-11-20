@@ -165,6 +165,22 @@ public static class BudgetCalculator
     }
 
     /// <summary>
+    /// The plan's suggestions as budget lines: each category without a budget (of its own or on a detail)
+    /// that has a suggestion, yearly-only where that's suggested; the minor ones are left out.
+    /// </summary>
+    public static IReadOnlyList<BudgetLineRequest> SuggestedLines(BudgetPlan plan)
+    {
+        var minor = MinorCategories(plan);
+        var budgeted = plan.Rows.Where(r => r.Target is not null).Select(r => r.Category).ToHashSet();
+        return plan.Rows
+            .Where(r => r.SubCategory is null && !budgeted.Contains(r.Category) && !minor.Contains(r.Category))
+            .Select(r => (Row: r, Amount: r.SuggestionFor(r.SuggestYearly)))
+            .Where(x => x.Amount is not null)
+            .Select(x => new BudgetLineRequest(x.Row.Category, null, x.Amount, x.Row.SuggestYearly))
+            .ToList();
+    }
+
+    /// <summary>
     /// Spending that came in at most a third of the months (4 of 12, say) is irregular: a yearly budget fits
     /// it better than a monthly share. Under six months there's too little to tell.
     /// </summary>

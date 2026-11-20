@@ -110,6 +110,24 @@ public sealed class BudgetTests : IDisposable
     }
 
     [Fact]
+    public void SuggestedLinesSkipBudgetedAndMinorCategories()
+    {
+        var basis = new BudgetBasis(new DateOnly(2025, 1, 1), new DateOnly(2025, 12, 31), 12);
+        var plan = new BudgetPlan(2026, Today, basis,
+        [
+            new(Categories.Home, null, 9000, 9000, null, null, 0, SuggestedMonthly: 750),
+            new(Categories.Travel, null, 900, 900, null, null, 0, SuggestYearly: true, SuggestedMonthly: 75),
+            new(Categories.FoodAndDining, null, 500, 500, 600, null, 0, SuggestedMonthly: 45), // has a budget
+            new(Categories.Shopping, null, 90, 100, null, null, 0, SuggestedMonthly: 10), // under 1%
+            new(Categories.Education, null, 0, null, null, null, 0), // no suggestion
+        ], 0);
+
+        Assert.Equal(
+            [new BudgetLineRequest(Categories.Home, null, 9000, false), new BudgetLineRequest(Categories.Travel, null, 900, true)],
+            BudgetCalculator.SuggestedLines(plan));
+    }
+
+    [Fact]
     public void NoSuggestionWithoutSpending()
     {
         Assert.Null(BudgetCalculator.Suggest(0, 12));

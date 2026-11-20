@@ -120,7 +120,7 @@ public static class HelpCatalog
         new("receipts", "Receipts", CategoryTax, "camera",
             "Scanning a receipt and attaching it to its transaction, or attaching a file from the tax report.",
             "/receipts/scan", "scan a receipt",
-            ["receipt", "receipts", "scan", "photo", "camera", "attach", "attachment", "pdf", "missing receipts", "phone", "slip", "proof", "read with claude"],
+            ["receipt", "receipts", "scan", "photo", "camera", "attach", "attachment", "pdf", "missing receipts", "phone", "slip", "proof"],
             typeof(ReceiptsArticle)),
 
         new("household", "Household and tax estimate", CategoryTax, "people",

@@ -3,7 +3,6 @@
 @inject ILedgerStore Store
 @inject Camera Camera
 @inject ReceiptOcr Ocr
-@inject CloudReceiptReader Cloud
 @inject IJSRuntime JS
 @using MapleLedger.Core.Receipts
 
@@ -81,16 +80,10 @@
                             <h3 class="h6 mb-0">What it says</h3>
                             @if (!_reading)
                             {
-                                <span class="d-flex gap-3">
-                                    @if (CanRead)
-                                    {
-                                        <button class="btn btn-sm btn-link p-0" @onclick="ReadAsync">@(_rawText is null ? "Read it" : "Read again")</button>
-                                    }
-                                    @if (_cloudAvailable && CloudReceiptReader.CanRead(_photoType))
-                                    {
-                                        <button class="btn btn-sm btn-link p-0" @onclick="ReadWithClaudeAsync" title="Sends this photo to Anthropic's API to read it">Read with Claude</button>
-                                    }
-                                </span>
+                                @if (CanRead)
+                                {
+                                    <button class="btn btn-sm btn-link p-0" @onclick="ReadAsync">@(_rawText is null ? "Read it" : "Read again")</button>
+                                }
                             }
                         </div>
 
@@ -301,9 +294,6 @@
 
     private bool CanRead => _photo is not null && (_photoType == "application/pdf" || ReceiptOcr.CanRead(_photoType));
 
-    /// <summary>Premium users on a server with an Anthropic key can also have Claude read a receipt.</summary>
-    private bool _cloudAvailable;
-
     private DateOnly _from, _to;
     private decimal? _amount;
     private string? _search, _taxCode;
@@ -325,7 +315,6 @@
     {
         _to = Periods.Today;
         _from = _to.AddDays(-60);
-        _cloudAvailable = await Cloud.IsAvailableAsync();
         try
         {
             _accounts = await Store.GetAccountsAsync();
@@ -539,39 +528,6 @@
             _reading = false;
             await LoadSearchIfShownAsync();
             StateHasChanged(); // started outside an event handler, so nothing else re-renders
-        }
-    }
-
-    /// <summary>Asks first: unlike reading in the browser, this sends the photo to Anthropic.</summary>
-    private async Task ReadWithClaudeAsync()
-    {
-        if (_photo is not { } photo || _reading) return;
-        if (!await JS.InvokeAsync<bool>("confirm",
-                "Read this receipt with Claude?\n\nThe photo is sent to Anthropic's API to be read. Reading in the browser keeps it on this device but is less accurate.")) return;
-
-        _reading = true;
-        (_progressText, _progressValue, _readNote, _error) = ("Claude is reading the receipt…", 0.5, null, null);
-        StateHasChanged();
-        try
-        {
-            var fields = await Cloud.ReadAsync(photo, _photoType, _photoName);
-            if (_photo != photo) return;
-
-            (_total, _date, _merchant, _otherDate) = (fields.Total, fields.Date, fields.Merchant, null);
-            _readNote = fields == new ReceiptFields(null, null, null)
-                ? "Claude couldn't make out a total or date. Type them in."
-                : "Read by Claude. Check the numbers before you attach it.";
-            await FindMatchesAsync();
-        }
-        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
-        {
-            _readNote = ex.Message;
-        }
-        finally
-        {
-            _reading = false;
-            await LoadSearchIfShownAsync();
-            StateHasChanged();
         }
     }
 

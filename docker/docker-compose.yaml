@@ -22,8 +22,6 @@ services:
       Auth__SigningKey: "${LEDGER_API_SIGNING_KEY}"
       # Registered users with these emails get premium (server storage) automatically.
       Premium__Emails: "${PREMIUM_EMAILS}"
-      # Optional: lets premium users have receipts read by Claude. Empty turns the feature off.
-      Anthropic__ApiKey: "${ANTHROPIC_API_KEY:-}"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://env-dashboard:18889"
       OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
       OTEL_SERVICE_NAME: "ledger-api"

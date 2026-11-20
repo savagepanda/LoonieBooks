@@ -1,5 +1,4 @@
 using System.Text;
-using MapleLedger.ApiService.Receipts;
 using MapleLedger.ApiService.Users;
 using MapleLedger.Core;
 using MapleLedger.Core.Budgets;
@@ -88,39 +87,6 @@ public static class LedgerEndpoints
             context.Response.Headers.XContentTypeOptions = "nosniff";
             return Results.File(file.Content, file.Info.ContentType, file.Info.FileName);
         });
-
-        api.MapGet("/receipts/reader", (IServiceProvider services) =>
-            new ReceiptReaderStatus(services.GetService<ClaudeReceiptReader>() is not null));
-
-        // Sends the file to Anthropic's API; the browser only calls this after the user agrees.
-        api.MapPost("/receipts/read", async (IServiceProvider services, ILogger<ClaudeReceiptReader> logger, UploadReceiptRequest request, CancellationToken ct) =>
-        {
-            if (services.GetService<ClaudeReceiptReader>() is not { } reader)
-            {
-                return Results.Problem("Reading receipts with Claude isn't set up on this server.", statusCode: StatusCodes.Status501NotImplemented);
-            }
-
-            var contentType = LedgerService.CheckReceiptFile(request.ContentType, request.Content);
-            if (!ClaudeReceiptReader.ContentTypes.Contains(contentType))
-            {
-                return Results.ValidationProblem(new Dictionary<string, string[]> { ["receipt"] = ["Claude can read JPEG, PNG and WebP photos and PDFs."] });
-            }
-
-            try
-            {
-                return Results.Ok(await reader.ReadAsync(contentType, request.Content, DateOnly.FromDateTime(DateTime.UtcNow), ct));
-            }
-            catch (Anthropic.Exceptions.AnthropicRateLimitException ex)
-            {
-                logger.LogWarning(ex, "Claude rate limit while reading a receipt.");
-                return Results.Problem("Claude is busy right now. Try again in a minute, or read the receipt in the browser.", statusCode: StatusCodes.Status429TooManyRequests);
-            }
-            catch (Exception ex) when (ex is Anthropic.Exceptions.AnthropicApiException or HttpRequestException)
-            {
-                logger.LogError(ex, "Claude couldn't read a receipt.");
-                return Results.Problem("Claude couldn't read the receipt. Try again, or read it in the browser.", statusCode: StatusCodes.Status502BadGateway);
-            }
-        }).WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(8 * 1024 * 1024));
 
         api.MapPost("/receipts/match", (LedgerService ledger, ReceiptFields receipt, CancellationToken ct) =>
             ledger.FindReceiptMatchesAsync(receipt, ct: ct));
