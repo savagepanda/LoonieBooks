@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MapleLedger.Core;
+using MapleLedger.Core.Budgets;
 using MapleLedger.Core.Categorization;
 using MapleLedger.Core.Import;
 using MapleLedger.Core.Investments;
@@ -154,6 +155,8 @@ public sealed class LedgerService(LedgerDbContext db)
         await db.Properties.ExecuteDeleteAsync(ct);
         await db.HousePriceIndex.ExecuteDeleteAsync(ct);
         await db.PriceHistory.ExecuteDeleteAsync(ct);
+        await db.MonthlyExchangeRates.ExecuteDeleteAsync(ct);
+        await db.Budgets.ExecuteDeleteAsync(ct);
         return new ClearLedgerResult(accounts, transactions, receipts, members);
     }
 
@@ -800,8 +803,9 @@ public sealed class LedgerService(LedgerDbContext db)
         var query = WhereAccounts(WhereCategory(db.Transactions.Between(from, to), category, subCategory, kind), accountIds).WithAnyTag(tagIds);
         var transactions = await query.NewestFirst().ToLedgerTransactionsAsync(ct);
         var accounts = await db.Accounts.AsNoTracking().ToListAsync(ct);
+        // Totals in Canadian dollars, each transaction at its month's rate; the list keeps its account's currency.
+        var fdx = await InCadAsync(transactions.Select(t => t.Transaction).ToList(), accounts, ct);
         if (accountIds is { Count: > 0 }) accounts = accounts.Where(a => accountIds.Contains(a.AccountId)).ToList();
-        var fdx = transactions.Select(t => t.Transaction).ToList();
         var (income, expenses) = CashFlowCalculator.Totals(fdx);
 
         return new DashboardSummary(
@@ -1225,6 +1229,90 @@ public sealed class LedgerService(LedgerDbContext db)
 
         await db.SaveChangesAsync(ct);
         return new ExchangeRate(currency, value, rate.AsOf, rate.Source);
+    }
+
+    // ---------------------------------------------------------------- monthly exchange rates
+
+    /// <summary>Enough for every currency the Bank of Canada publishes over a couple of decades.</summary>
+    public const int MaxMonthlyExchangeRates = 10_000;
+
+    /// <summary>The Bank of Canada's monthly average rates saved for the ledger's currencies, by currency then month.</summary>
+    public async Task<IReadOnlyList<MonthlyExchangeRate>> GetMonthlyExchangeRatesAsync(CancellationToken ct = default) =>
+        (await db.MonthlyExchangeRates.AsNoTracking().ToListAsync(ct))
+            .Select(r => new MonthlyExchangeRate(r.Currency, DateOnly.FromDateTime(r.Month.UtcDateTime), r.Rate))
+            .OrderBy(r => r.Currency, StringComparer.Ordinal)
+            .ThenBy(r => r.Month)
+            .ToList();
+
+    /// <summary>
+    /// Saves monthly average rates: a currency and month not yet saved is added, and one saved with
+    /// another rate is changed. Saved at once, and only when something changed.
+    /// </summary>
+    public async Task<ApplyMonthlyExchangeRatesResult> ApplyMonthlyExchangeRatesAsync(ApplyMonthlyExchangeRatesRequest request, CancellationToken ct = default)
+    {
+        var list = request.Rates ?? [];
+        if (list.Count > ApplyMonthlyExchangeRatesRequest.MaxRates)
+        {
+            throw LedgerValidationException.For("rates", $"Send at most {ApplyMonthlyExchangeRatesRequest.MaxRates} monthly rates at once.");
+        }
+
+        var thisMonth = HoldingPriceMoves.FirstOfMonth(DateOnly.FromDateTime(DateTime.UtcNow));
+        var rates = new Dictionary<(string Currency, DateOnly Month), decimal>();
+        foreach (var r in list)
+        {
+            var currency = (r.Currency ?? "").Trim().ToUpperInvariant();
+            var month = HoldingPriceMoves.FirstOfMonth(r.Month);
+            if (!IsCurrencyCode(currency) || currency == Holding.Cad || r.Rate is <= 0 or > ExchangeRate.MaxRate || month.Year < 1950 || month > thisMonth)
+            {
+                throw LedgerValidationException.For("rates", $"The {currency} rate for {month:yyyy-MM} can't be right.");
+            }
+
+            rates[(currency, month)] = Math.Round(r.Rate, 8);
+        }
+
+        if (rates.Count == 0) return new ApplyMonthlyExchangeRatesResult(0);
+        var records = await db.MonthlyExchangeRates.ToListAsync(ct);
+        var existing = records
+            .GroupBy(r => (r.Currency, DateOnly.FromDateTime(r.Month.UtcDateTime)))
+            .ToDictionary(g => g.Key, g => g.First());
+        int changes = 0, count = records.Count;
+        foreach (var ((currency, month), rate) in rates)
+        {
+            if (existing.TryGetValue((currency, month), out var record))
+            {
+                if (record.Rate == rate) continue;
+                record.Rate = rate;
+            }
+            else
+            {
+                db.MonthlyExchangeRates.Add(new MonthlyExchangeRateRecord { Id = Guid.NewGuid(), Currency = currency, Month = new DateTimeOffset(month.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero), Rate = rate });
+                count++;
+            }
+
+            changes++;
+        }
+
+        if (count > MaxMonthlyExchangeRates)
+        {
+            db.ChangeTracker.Clear();
+            throw LedgerValidationException.For("rates", $"A ledger can keep at most {MaxMonthlyExchangeRates} monthly rates.");
+        }
+
+        if (changes > 0) await db.SaveChangesAsync(ct);
+        return new ApplyMonthlyExchangeRatesResult(changes);
+    }
+
+    /// <summary>
+    /// The transactions with their amounts in Canadian dollars, each at its month's average rate (see
+    /// <see cref="MonthlyCurrencyRates"/>), by its account's currency. As they are when every account is in Canadian dollars.
+    /// </summary>
+    private async Task<IReadOnlyList<Transaction>> InCadAsync(IReadOnlyList<Transaction> transactions, IReadOnlyList<Account>? accounts, CancellationToken ct)
+    {
+        accounts ??= await db.Accounts.AsNoTracking().ToListAsync(ct);
+        var currencyOf = accounts.ToDictionary(a => a.AccountId, CurrencyRates.CurrencyOf);
+        if (currencyOf.Values.All(c => c == Holding.Cad)) return transactions;
+        var rates = new MonthlyCurrencyRates(new CurrencyRates(await GetExchangeRatesAsync(ct)), await GetMonthlyExchangeRatesAsync(ct));
+        return rates.InCad(transactions, currencyOf);
     }
 
     // ---------------------------------------------------------------- quotes
@@ -1680,6 +1768,158 @@ public sealed class LedgerService(LedgerDbContext db)
         }
 
         return clean;
+    }
+
+    // ---------------------------------------------------------------- budgets
+
+    /// <summary>The years a budget can be set for or looked at: from 2000 to next year.</summary>
+    private static void ValidateBudgetYear(int year)
+    {
+        if (year < 2000 || year > DateTime.UtcNow.Year + 1)
+        {
+            throw LedgerValidationException.For("year", $"Pick a year from 2000 to {DateTime.UtcNow.Year + 1}.");
+        }
+    }
+
+    /// <summary>Every budget line, by year then category.</summary>
+    public async Task<IReadOnlyList<BudgetTarget>> GetBudgetTargetsAsync(CancellationToken ct = default) =>
+        (await db.Budgets.AsNoTracking().ToListAsync(ct))
+            .OrderBy(b => b.Year)
+            .ThenBy(b => b.Category, StringComparer.Ordinal)
+            .ThenBy(b => b.SubCategory, StringComparer.Ordinal)
+            .Select(b => new BudgetTarget(b.Year, b.Category, b.SubCategory, b.Amount, b.Yearly))
+            .ToList();
+
+    /// <summary>
+    /// The year's budget page: each spending category with this year's and last year's budget, what's
+    /// been spent this year, and a suggestion from last year's spending (or the latest complete months).
+    /// Amounts are in Canadian dollars, other currencies at each month's average rate.
+    /// </summary>
+    public async Task<BudgetPlan> GetBudgetPlanAsync(int year, CancellationToken ct = default)
+    {
+        ValidateBudgetYear(year);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var basis = BudgetCalculator.Basis(year, await FirstTransactionDateAsync(ct), today);
+        var yearStart = new DateOnly(year, 1, 1);
+        var yearEnd = new DateOnly(year, 12, 31);
+        var from = basis is not null && basis.From < yearStart ? basis.From : yearStart;
+        var to = basis is not null && basis.To > yearEnd ? basis.To : yearEnd;
+        var transactions = await InCadAsync(await db.Transactions.AsNoTracking().Between(from, to).ToListAsync(ct), null, ct);
+        var targets = (await GetBudgetTargetsAsync(ct)).Where(t => t.Year == year || t.Year == year - 1);
+        return BudgetCalculator.Plan(year, today, basis, await GetCategoryTreeAsync(ct), targets, transactions);
+    }
+
+    /// <summary>
+    /// Sets the year's budget for the lines given (a year's amount, in Canadian dollars, and whether it's
+    /// kept for the year only), or removes a line given no amount. Returns the year's budget lines.
+    /// </summary>
+    public async Task<IReadOnlyList<BudgetTarget>> SetBudgetAsync(int year, SetBudgetRequest request, CancellationToken ct = default)
+    {
+        ValidateBudgetYear(year);
+        var lines = request.Lines ?? [];
+        if (lines.Count > SetBudgetRequest.MaxLines)
+        {
+            throw LedgerValidationException.For("lines", $"Set at most {SetBudgetRequest.MaxLines} budget lines at once.");
+        }
+
+        var tree = await GetCategoryTreeAsync(ct);
+        var records = await db.Budgets.Where(b => b.Year == year).ToListAsync(ct);
+        var added = 0;
+        foreach (var line in lines)
+        {
+            var category = (line.Category ?? "").Trim();
+            var sub = string.IsNullOrWhiteSpace(line.SubCategory) ? null : line.SubCategory.Trim();
+            if (!BudgetCalculator.IsBudgetable(category) || !Categories.IsValid(tree, category, sub))
+            {
+                throw LedgerValidationException.For("category", $"{Categories.Label(category, sub)} isn't a spending category that can have a budget.");
+            }
+
+            if (line.Amount is < 0 or > BudgetTarget.MaxAmount)
+            {
+                throw LedgerValidationException.For("amount", $"Enter a budget for {Categories.Label(category, sub)} of zero or more.");
+            }
+
+            var record = records.FirstOrDefault(r => r.Category == category && r.SubCategory == sub);
+            var amount = Math.Round(line.Amount ?? 0, 2, MidpointRounding.AwayFromZero);
+            if (amount == 0)
+            {
+                if (record is null) continue;
+                db.Budgets.Remove(record);
+                records.Remove(record);
+            }
+            else if (record is null)
+            {
+                record = new BudgetRecord { Id = Guid.NewGuid(), Year = year, Category = category, SubCategory = sub, Amount = amount, Yearly = line.Yearly ?? false };
+                db.Budgets.Add(record);
+                records.Add(record);
+                added++;
+            }
+            else
+            {
+                record.Amount = amount;
+                record.Yearly = line.Yearly ?? record.Yearly;
+            }
+        }
+
+        if (added > 0 && await db.Budgets.CountAsync(ct) + added > BudgetTarget.MaxCount)
+        {
+            db.ChangeTracker.Clear();
+            throw LedgerValidationException.For("lines", $"A ledger can keep at most {BudgetTarget.MaxCount} budget lines over all its years.");
+        }
+
+        await db.SaveChangesAsync(ct);
+        return (await GetBudgetTargetsAsync(ct)).Where(t => t.Year == year).ToList();
+    }
+
+    /// <summary>
+    /// Each month of the years from <paramref name="fromYear"/> to <paramref name="toYear"/> up to this
+    /// one, with every budget line's twelfth of its year and the month's spending in Canadian dollars.
+    /// Covers the whole ledger: budgets are the household's, whatever accounts or tags the dashboard shows.
+    /// </summary>
+    public async Task<IReadOnlyList<BudgetMonth>> GetBudgetMonthsAsync(int fromYear, int toYear, CancellationToken ct = default)
+    {
+        ValidateBudgetYear(fromYear);
+        ValidateBudgetYear(toYear);
+        if (toYear < fromYear || toYear - fromYear >= 10)
+        {
+            throw LedgerValidationException.For("year", "Pick up to ten years, the first no later than the last.");
+        }
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var transactions = await InCadAsync(await db.Transactions.AsNoTracking().Between(new DateOnly(fromYear, 1, 1), new DateOnly(toYear, 12, 31)).ToListAsync(ct), null, ct);
+        var targets = (await GetBudgetTargetsAsync(ct)).Where(t => t.Year >= fromYear && t.Year <= toYear);
+        return BudgetCalculator.Months(fromYear, toYear, today, targets, transactions);
+    }
+
+    /// <summary>The day of the ledger's earliest transaction; null when it has none.</summary>
+    private async Task<DateOnly?> FirstTransactionDateAsync(CancellationToken ct) =>
+        await db.Transactions.AsNoTracking()
+            .Select(t => t.TransactionTimestamp ?? t.PostedTimestamp)
+            .Where(d => d != null)
+            .OrderBy(d => d)
+            .FirstOrDefaultAsync(ct) is { } first
+            ? DateOnly.FromDateTime(first.Date)
+            : null;
+
+    /// <summary>Budget lines this ledger has none of for that year and category; ones this version would refuse are skipped.</summary>
+    private async Task RestoreBudgetsAsync(LedgerBackup backup, CancellationToken ct)
+    {
+        var have = (await GetBudgetTargetsAsync(ct)).Select(t => (t.Year, t.Category, t.SubCategory)).ToHashSet();
+        foreach (var year in (backup.Budgets ?? []).Where(t => !have.Contains((t.Year, t.Category, t.SubCategory))).GroupBy(t => t.Year))
+        {
+            foreach (var target in year)
+            {
+                try
+                {
+                    await SetBudgetAsync(year.Key, new SetBudgetRequest([new BudgetLineRequest(target.Category, target.SubCategory, target.Amount, target.Yearly)]), ct);
+                }
+                catch (LedgerValidationException)
+                {
+                }
+
+                db.ChangeTracker.Clear();
+            }
+        }
     }
 
     // ---------------------------------------------------------------- household
@@ -2451,7 +2691,8 @@ public sealed class LedgerService(LedgerDbContext db)
         await GetHoldingsAsync(ct: ct),
         await GetExchangeRatesAsync(ct),
         await GetPropertiesAsync(ct),
-        await GetHpiReadingsAsync(ct));
+        await GetHpiReadingsAsync(ct),
+        await GetBudgetTargetsAsync(ct));
 
     /// <summary>
     /// Merges a backup into this ledger. Accounts already present are kept as they are, and
@@ -2660,6 +2901,7 @@ public sealed class LedgerService(LedgerDbContext db)
         }
 
         await RestoreRealEstateAsync(backup, accountIds, ct);
+        await RestoreBudgetsAsync(backup, ct);
         return new RestoreResult(accountsAdded, added, duplicates, receiptsAdded);
     }
 

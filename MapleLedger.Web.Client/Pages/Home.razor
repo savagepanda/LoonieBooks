@@ -8,6 +8,7 @@
 @inject QuoteFeed Prices
 @inject HpiFeed Hpi
 @inject PriceHistoryFeed PriceHistory
+@inject MonthlyRateFeed MonthlyRates
 @inject IJSRuntime JS
 @implements IAsyncDisposable
 
@@ -118,6 +119,30 @@ else
                             {
                                 <NetWorthChart Months="_netWorth" Selected="@(_month is { } m ? (m.Year, m.Month) : null)" OnSelect="SelectNetWorthMonthAsync" />
                             }
+                        }
+                        else if (_chart == Chart.Budget)
+                        {
+                            <BudgetChart Months="_budgetMonths" From="_period.From" To="_period.To" Category="BudgetCategory"
+                                         Title="@BudgetTitle" Note="@BudgetNote"
+                                         Message="@(_budgetError ?? (_budgetMonths is null ? "Loading…" : null))" MessageIsError="_budgetError is not null"
+                                         Selected="@(_month is { } m ? (m.Year, m.Month) : null)" OnSelect="SelectBudgetMonthAsync" />
+                        }
+                        else if (_chart == Chart.BudgetStatus)
+                        {
+                            var (statusYear, statusMonth) = StatusMonth;
+                            <BudgetStatusChart Months="StatusMonths" Year="statusYear" Month="statusMonth" Yearly="_statusYearly"
+                                               Title="@($"Budget status · {(_statusYearly ? statusYear == Periods.Today.Year ? $"{statusYear} so far" : $"{statusYear}" : Display.Month(statusYear, statusMonth))}")"
+                                               Message="@(_statusError ?? (StatusMonths is null ? "Loading…" : null))" MessageIsError="_statusError is not null"
+                                               Selected="StatusCategory" OnSelect="SelectStatusCategoryAsync">
+                                <HeaderContent>
+                                    <div class="btn-group btn-group-sm ms-auto" role="group" aria-label="Compare by">
+                                        <button type="button" class="btn btn-outline-secondary py-0 @(_statusYearly ? "" : "active")" aria-pressed="@(_statusYearly ? "false" : "true")"
+                                                title="Each category's spending in the month against its monthly budget" @onclick="() => ShowStatusYearlyAsync(false)">Month</button>
+                                        <button type="button" class="btn btn-outline-secondary py-0 @(_statusYearly ? "active" : "")" aria-pressed="@(_statusYearly ? "true" : "false")"
+                                                title="Each category's spending so far this year against its whole yearly budget" @onclick="() => ShowStatusYearlyAsync(true)">Year</button>
+                                    </div>
+                                </HeaderContent>
+                            </BudgetStatusChart>
                         }
                         else if (_chart == Chart.AccountValue)
                         {
@@ -496,8 +521,8 @@ else
     private sealed record BreakdownAmount(string Text, string Title);
 
     /// <summary>
-    /// The card's bottom-right corner: the list's total. Assets and liabilities are in Canadian dollars;
-    /// spending and income are added up as recorded, with the month they're narrowed to.
+    /// The card's bottom-right corner: the list's total, in Canadian dollars (spending and income in other
+    /// currencies at their month's rate), with the month spending and income are narrowed to.
     /// </summary>
     private BreakdownAmount? BreakdownTotal(DashboardSummary bars)
     {
@@ -523,8 +548,8 @@ else
     }
 
     // Which chart the top card shows. Remembered in this browser.
-    private enum Chart { CashFlow, NetWorth, AccountValue }
-    private static readonly Chart[] Charts = [Chart.CashFlow, Chart.NetWorth, Chart.AccountValue];
+    private enum Chart { CashFlow, NetWorth, AccountValue, Budget, BudgetStatus }
+    private static readonly Chart[] Charts = [Chart.CashFlow, Chart.Budget, Chart.BudgetStatus, Chart.NetWorth, Chart.AccountValue];
     private Chart _chart;
     private const string ChartPreference = "dashboard.chart";
 
@@ -532,6 +557,8 @@ else
     {
         Chart.NetWorth => "net worth by month",
         Chart.AccountValue => "account value by month",
+        Chart.Budget => "budget vs spending",
+        Chart.BudgetStatus => "budget status by category",
         _ => "income vs spending by month",
     };
 
@@ -544,6 +571,113 @@ else
         await Preferences.SetAsync(ChartPreference, chart.ToString());
         if (chart == Chart.NetWorth && _netWorth is null && _netWorthError is null) await LoadNetWorthAsync();
         if (chart == Chart.AccountValue && _accountValue is null && _accountValueError is null) await LoadAccountValueAsync();
+        if (chart == Chart.Budget && _budgetMonths is null && _budgetError is null) await LoadBudgetAsync();
+        if (chart == Chart.BudgetStatus && StatusMonths is null && _statusError is null) await LoadStatusAsync();
+    }
+
+    // Budget against spending by month over the period, loaded when its chart is shown. Budgets are the
+    // household's: they cover every account and tag, whatever the dashboard is narrowed to.
+    private IReadOnlyList<BudgetMonth>? _budgetMonths;
+    private string? _budgetError;
+    private int _budgetVersion;
+
+    /// <summary>How many years back the monthly exchange rates are fetched for, this one included.</summary>
+    private const int RateYears = 6;
+
+    private async Task LoadBudgetAsync()
+    {
+        var version = ++_budgetVersion;
+        _budgetError = null;
+        var today = Periods.Today;
+        try
+        {
+            var months = await Store.GetBudgetMonthsAsync(_period.From.Year, Math.Min(_period.To.Year, today.Year));
+            if (version == _budgetVersion) _budgetMonths = months;
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            if (version == _budgetVersion) _budgetError = $"Couldn't load the budget: {ex.Message}";
+        }
+    }
+
+    // Budget status: each budget line against its spending, for a month or the year so far, loaded when
+    // its chart is shown. Month or Year is remembered in this browser.
+    private bool _statusYearly;
+    private const string StatusYearlyPreference = "dashboard.budgetStatusYearly";
+    private (int Year, IReadOnlyList<BudgetMonth> Months)? _status;
+    private string? _statusError;
+    private int _statusVersion;
+
+    /// <summary>The month compared: the one picked on a chart, or the period's last (up to today).</summary>
+    private (int Year, int Month) StatusMonth
+    {
+        get
+        {
+            if (_month is { } m) return (m.Year, m.Month);
+            var last = _period.To < Periods.Today ? _period.To : Periods.Today;
+            return (last.Year, last.Month);
+        }
+    }
+
+    private IReadOnlyList<BudgetMonth>? StatusMonths => _status is { } s && s.Year == StatusMonth.Year ? s.Months : null;
+
+    private async Task ShowStatusYearlyAsync(bool yearly)
+    {
+        _statusYearly = yearly;
+        await Preferences.SetAsync(StatusYearlyPreference, yearly);
+    }
+
+    private async Task LoadStatusAsync()
+    {
+        var version = ++_statusVersion;
+        _statusError = null;
+        var year = StatusMonth.Year;
+        try
+        {
+            var months = await Store.GetBudgetMonthsAsync(year, year);
+            if (version == _statusVersion) _status = (year, months);
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            if (version == _statusVersion) _statusError = $"Couldn't load the budget: {ex.Message}";
+        }
+    }
+
+    /// <summary>The spending category picked on the dashboard, highlighted on the status chart.</summary>
+    private (string Category, string? SubCategory)? StatusCategory =>
+        _category is { } c && BudgetCalculator.IsBudgetable(c.Category) && c.Kind != CategoryKind.Income ? (c.Category, c.SubCategory) : null;
+
+    /// <summary>A category clicked on the status chart picks it, as in the Spending list.</summary>
+    private Task SelectStatusCategoryAsync((string Category, string? SubCategory)? pick) =>
+        SelectCategoryAsync(pick is { } p ? new CategoryChoice(p.Category, p.SubCategory, CategoryKind.Expense) : null);
+
+    /// <summary>The budget a picked spending category leads to; null (the whole budget) otherwise.</summary>
+    private CategoryChoice? BudgetCategory => _lead == Lead.Category && _category is { } c ? c : null;
+
+    private string BudgetTitle => BudgetCategory is { } c ? $"{ChoiceLabel(c)} budget by month" : "Budget vs spending by month";
+
+    private string? BudgetNote => _accountIds.Count > 0 || _tagIds.Count > 0 ? "All accounts and tags" : null;
+
+    /// <summary>A month clicked on the budget chart picks the same month as the cash flow chart's.</summary>
+    private Task SelectBudgetMonthAsync((int Year, int Month)? month) =>
+        SelectMonthAsync(month is not { } m ? null : _summary?.Monthly.FirstOrDefault(x => x.Year == m.Year && x.Month == m.Month));
+
+    /// <summary>
+    /// The Bank of Canada's monthly rates for the accounts' other currencies, so their spending is
+    /// converted at its own month's rate; reloads when any came in.
+    /// </summary>
+    private async Task RefreshMonthlyRatesAsync()
+    {
+        try
+        {
+            if (_accounts is null) return;
+            var from = new DateOnly(Periods.Today.Year - RateYears, 1, 1);
+            if (await MonthlyRates.RefreshAsync(_accounts, _period.From < from ? _period.From : from)) await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            // The dashboard is already showing, at the rates as last saved.
+        }
     }
 
     // A sideways swipe across the chart switches it, like the arrows.
@@ -1040,6 +1174,7 @@ else
         _byAccount = await Preferences.GetAsync<bool?>(ByAccountPreference) ?? await Preferences.GetAsync<bool>("dashboard.assetsByAccount");
         // Real estate had a view of its own before it became part of Assets.
         _chart = Enum.TryParse<Chart>(await Preferences.GetAsync<string>(ChartPreference), out var chart) ? chart : Chart.CashFlow;
+        _statusYearly = await Preferences.GetAsync<bool>(StatusYearlyPreference);
         var saved = await Preferences.GetAsync<string>(BreakdownPreference);
         _breakdown = saved == "RealEstate" ? Breakdown.Assets : Enum.TryParse<Breakdown>(saved, out var breakdown) ? breakdown : Breakdown.Spending;
         await (_breakdown switch
@@ -1062,6 +1197,7 @@ else
             // The dashboard is already showing; the values are by the index as last saved.
         }
 
+        await RefreshMonthlyRatesAsync();
         await RefreshPricesAsync();
     }
 
@@ -1142,8 +1278,13 @@ else
             _netWorthVersion++;
             (_accountValue, _accountValueError) = (null, null);
             _accountValueVersion++;
+            (_budgetMonths, _budgetError, _status, _statusError) = (null, null, null, null);
+            _budgetVersion++;
+            _statusVersion++;
             if (_chart == Chart.NetWorth) await LoadNetWorthAsync();
             if (_chart == Chart.AccountValue) await LoadAccountValueAsync();
+            if (_chart == Chart.Budget) await LoadBudgetAsync();
+            if (_chart == Chart.BudgetStatus) await LoadStatusAsync();
         }
         catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
         {
@@ -1178,7 +1319,9 @@ else
     {
         _month = month;
         (_holding, _assetAccount, _realEstatePick) = (null, null, null); // back to the transactions, for the month
-        return SelectionChangedAsync();
+        // A month in another year needs that year's budget status.
+        var status = _chart == Chart.BudgetStatus && StatusMonths is null && _statusError is null ? LoadStatusAsync() : Task.CompletedTask;
+        return Task.WhenAll(SelectionChangedAsync(), status);
     }
 
     private Task SelectCategoryAsync(CategoryChoice? category)
@@ -1305,6 +1448,9 @@ else
             _summary = summary;
             _focusKey = null;
             await LoadFocusAsync();
+            (_budgetMonths, _status) = (null, null); // spending may have moved between budgets
+            if (_chart == Chart.Budget) await LoadBudgetAsync();
+            if (_chart == Chart.BudgetStatus) await LoadStatusAsync();
         }
         catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
         {

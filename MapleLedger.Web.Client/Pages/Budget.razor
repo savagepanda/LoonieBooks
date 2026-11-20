@@ -1,0 +1,497 @@
+@page "/budget"
+@using System.Globalization
+@inject ILedgerStore Store
+@inject Preferences Preferences
+@inject MonthlyRateFeed MonthlyRates
+@inject NavigationManager Navigation
+
+<PageTitle>Budget · LoonieBooks</PageTitle>
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+    <h1 class="h3 mb-0">Budget</h1>
+    <div class="d-flex flex-wrap gap-2">
+        <div class="btn-group btn-group-sm" role="group" aria-label="Amounts per">
+            <button type="button" class="btn btn-outline-secondary @(_yearly ? "" : "active")" aria-pressed="@(_yearly ? "false" : "true")" @onclick="() => ShowYearlyAsync(false)">Per month</button>
+            <button type="button" class="btn btn-outline-secondary @(_yearly ? "active" : "")" aria-pressed="@(_yearly ? "true" : "false")" @onclick="() => ShowYearlyAsync(true)">Per year</button>
+        </div>
+        <select class="form-select form-select-sm w-auto" aria-label="Year" value="@_year" @onchange="ChangeYearAsync">
+            @foreach (var year in Years)
+            {
+                <option value="@year">@year</option>
+            }
+        </select>
+    </div>
+</div>
+<p class="text-body-secondary">
+    Set what you mean to spend in each category for the year, then follow it on the dashboard's budget chart. Each budget is
+    for the whole year; a month's share is a twelfth of it, so switch to <strong>Per year</strong> to see lumpy costs like
+    insurance even out. Amounts are in Canadian dollars, spending in other currencies at its month's average rate.
+</p>
+
+@if (_error is not null)
+{
+    <div class="alert alert-danger">@_error</div>
+}
+
+@if (_plan is null)
+{
+    @if (_error is null)
+    {
+        <p class="text-body-secondary">Loading…</p>
+    }
+}
+else
+{
+    var plan = _plan;
+    var monthlyRows = Group(perYear: false);
+    var yearlyRows = Group(perYear: true);
+    // Per month, yearly budgets are added up apart: a twelfth of them isn't anyone's monthly figure.
+    var split = !_yearly && TotalOf(yearlyRows) > 0;
+    var total = plan.Total;
+    <div class="row g-3 mb-3">
+        <div class="col-6 col-lg-3">
+            <StatTile Label="@($"{plan.Year} budget")" Value="@(total == 0 ? "Not set" : Fmt(split ? TotalOf(monthlyRows) : total, false))"
+                      Detail="@TotalDetail(total, plan.PreviousTotal, split ? TotalOf(yearlyRows) : 0)" />
+        </div>
+        <div class="col-6 col-lg-3">
+            <StatTile Label="@(IsPast ? $"Spent in {plan.Year}" : "Spent so far")" Value="@Money.FormatWhole(total == 0 ? AllSpent : BudgetedSpentOf(plan.Rows))" Detail="@SpentDetail(total)" />
+        </div>
+        <div class="col-12 col-lg-6">
+            <div class="card h-100">
+                <div class="card-body py-2 small">
+                    <div class="mb-2">@BasisText()</div>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button class="btn btn-sm btn-primary" disabled="@(_busy || SuggestionsToUse.Count == 0)" @onclick="UseSuggestionsAsync"
+                                title="Fills in each category without a budget with its suggestion">
+                            Use suggestions@(SuggestionsToUse.Count > 0 ? $" ({SuggestionsToUse.Count})" : "")
+                        </button>
+                        @if (PreviousToCopy.Count > 0)
+                        {
+                            <button class="btn btn-sm btn-outline-secondary" disabled="@_busy" @onclick="CopyPreviousAsync"
+                                    title="Fills in each category without a budget with last year's">
+                                Copy @(plan.Year - 1)'s budget (@PreviousToCopy.Count)
+                            </button>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    @if (plan.Uncategorized > 0)
+    {
+        <div class="alert alert-warning py-2 small">
+            <strong>@Money.FormatWhole(plan.Uncategorized)</strong> of @(IsPast ? $"{plan.Year}'s" : "this year's") spending is uncategorized, so it counts against
+            no budget yet. <a href="@UncategorizedLink">Categorize it</a>.
+        </div>
+    }
+
+    <div class="card">
+        <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0 budget-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Category</th>
+                        <th scope="col" class="text-end" title="@BasisTitle">@BasisHeading</th>
+                        <th scope="col" class="text-end" title="The basis spending rounded up: its average month to a tidy amount, or for a yearly budget, its year">Suggested</th>
+                        <th scope="col" class="text-end">@(plan.Year - 1) budget</th>
+                        <th scope="col" class="text-end budget-input-col">@plan.Year budget</th>
+                        <th scope="col" class="text-center" title="A budget for the whole year, with no monthly share: for costs that come a few times a year">Yearly</th>
+                        <th scope="col" class="text-end">@(_yearly ? IsPast ? "Spent" : "Spent so far" : "Spent a month")</th>
+                        <th scope="col" class="budget-progress-col"><span class="visually-hidden">Progress</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{ var minor = BudgetCalculator.MinorCategories(plan); }
+                    @foreach (var row in plan.Rows.Where(r => !minor.Contains(r.Category)))
+                    {
+                        @RowOf(row)
+                    }
+                    @if (minor.Count > 0)
+                    {
+                        var others = plan.Rows.Where(r => r.SubCategory is null && minor.Contains(r.Category)).ToList();
+                        <tr class="budget-other">
+                            <th scope="row" class="fw-normal">
+                                <button type="button" class="btn btn-link p-0 text-reset text-decoration-none text-start text-nowrap" aria-expanded="@(_showOther ? "true" : "false")" @onclick="() => _showOther = !_showOther"
+                                        title="Categories with under 1% of your spending and no budget, kept out of the way. Open to budget one.">
+                                    <span class="budget-caret" aria-hidden="true">@(_showOther ? "▾" : "▸")</span> Other
+                                    <span class="small text-body-secondary">(@others.Count small)</span>
+                                </button>
+                            </th>
+                            <td class="text-end text-body-secondary">@Fmt(plan.Basis is { } ob && others.Sum(r => r.BasisSpent) is > 0 and var os ? os * 12 / ob.Months : null, false)</td>
+                            <td></td>
+                            <td></td>
+                            <td></td>
+                            <td></td>
+                            <td class="text-end text-body-secondary">@Fmt(others.Sum(r => r.Spent) is not 0 and var spent ? SpentShown(spent, false) : null, false)</td>
+                            <td></td>
+                        </tr>
+                        @if (_showOther)
+                        {
+                            foreach (var row in plan.Rows.Where(r => minor.Contains(r.Category)))
+                            {
+                                @RowOf(row, inOther: true)
+                            }
+                        }
+                    }
+                </tbody>
+                <tfoot>
+                    @if (split)
+                    {
+                        @FooterRow("Monthly budgets", monthlyRows, false)
+                        @FooterRow("Yearly budgets", yearlyRows, true)
+                    }
+                    else
+                    {
+                        @FooterRow("Total", plan.Rows, false)
+                    }
+                </tfoot>
+            </table>
+        </div>
+    </div>
+    <p class="small text-body-secondary mt-2">
+        A category's budget counts all of its spending, its details' included. A category with no budget of its own can be
+        budgeted detail by detail; its total is then the details' added up. Tick <strong>Yearly</strong> for costs that come a few
+        times a year, like tuition or tax instalments: they're kept for the year as a whole, so the dashboard's monthly chart
+        leaves them out. Refunds reduce spending in their category, and transfers between your accounts aren't spending. Leave a
+        budget empty (or 0) to remove it.
+    </p>
+}
+
+@code {
+    private int _year = Periods.Today.Year;
+    private bool _yearly;
+    private const string YearlyPreference = "budget.yearly";
+    private BudgetPlan? _plan;
+    private string? _error;
+    private bool _busy;
+    private int _version;
+    private readonly HashSet<string> _open = [];
+
+    // Other: the minor categories (under 1% of spending, no budget), listed only when it's opened.
+    private bool _showOther;
+
+    /// <summary>One category's row (or a detail's, when its category is open); indented under Other when it's one of those.</summary>
+    private RenderFragment RowOf(BudgetRow row, bool inOther = false)
+    {
+        var plan = _plan!;
+        var isSub = row.SubCategory is not null;
+        if (isSub && !_open.Contains(row.Category)) return _ => { };
+        var hasSubs = !isSub && plan.Rows.Any(r => r.Category == row.Category && r.SubCategory is not null);
+        var key = Key(row);
+        var perYear = PerYear(row);
+        var label = Categories.Label(row.Category, row.SubCategory);
+        var open = _open.Contains(row.Category);
+        var suggestion = row.SuggestionFor(perYear);
+        return @<tr class="@(isSub ? "budget-sub" : "") @(inOther ? "budget-other-item" : "") @(row.Target is null && row.Spent == 0 && row.BasisSpent == 0 ? "text-body-secondary" : "")" @key="key">
+            <th scope="row" class="fw-normal">
+                @if (isSub)
+                {
+                    <span class="budget-indent">@row.SubCategory</span>
+                }
+                else if (hasSubs)
+                {
+                    <button type="button" class="btn btn-link p-0 text-reset text-decoration-none" aria-expanded="@(open ? "true" : "false")" @onclick="() => Toggle(row.Category)">
+                        <span class="budget-caret" aria-hidden="true">@(open ? "▾" : "▸")</span> @row.Category
+                    </button>
+                }
+                else
+                {
+                    <span class="budget-caret" aria-hidden="true"></span> @row.Category
+                }
+            </th>
+            <td class="text-end">@Fmt(row.BasisSpent == 0 ? null : plan.Basis is { } b ? row.BasisSpent * 12 / b.Months : null, perYear)</td>
+            <td class="text-end">
+                @if (suggestion is { } suggested)
+                {
+                    <button type="button" class="btn btn-link btn-sm p-0" disabled="@_busy" title="Use this as the @plan.Year budget" @onclick="() => SaveAsync(row, suggested)">@Fmt(suggested, perYear)</button>
+                }
+            </td>
+            <td class="text-end">@Fmt(row.PreviousTarget, perYear)</td>
+            <td class="text-end">
+                <input class="form-control form-control-sm text-end budget-input" inputmode="decimal" aria-label="@($"{label} budget for {plan.Year}, {(_yearly || perYear ? "per year" : "per month")}")"
+                       value="@InputValue(row)" placeholder="—" disabled="@_busy" @onchange="e => ChangeAsync(row, e)" />
+            </td>
+            <td class="text-center">
+                <input type="checkbox" class="form-check-input" checked="@perYear" disabled="@_busy" title="@YearlyTitle(row)"
+                       aria-label="@($"{label}: a yearly budget, with no monthly share")" @onchange="() => ToggleYearlyAsync(row)" />
+            </td>
+            <td class="text-end">@Fmt(row.Spent == 0 ? null : SpentShown(row.Spent, perYear), perYear)</td>
+            <td>
+                @if (EffectiveTarget(row) is { } target && target > 0)
+                {
+                    <BudgetMeter Budget="target" Spent="row.Spent" Pace="Pace" />
+                }
+            </td>
+        </tr>;
+    }
+
+    [SupplyParameterFromQuery(Name = "year")] public int? QueryYear { get; set; }
+
+    private static IEnumerable<int> Years => Enumerable.Range(Periods.Today.Year - 4, 6).Reverse();
+
+    private bool IsPast => _year < Periods.Today.Year;
+    private bool IsFuture => _year > Periods.Today.Year;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (QueryYear is { } y && Years.Contains(y)) _year = y;
+        _yearly = await Preferences.GetAsync<bool>(YearlyPreference);
+        await LoadAsync();
+
+        // Then the monthly exchange rates for spending in other currencies, and again if any came in.
+        try
+        {
+            if (await MonthlyRates.RefreshAsync(await Store.GetAccountsAsync(), new DateOnly(_year - 1, 1, 1))) await LoadAsync();
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            // The page is showing, at the rates as last saved.
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        var version = ++_version;
+        _error = null;
+        try
+        {
+            var plan = await Store.GetBudgetPlanAsync(_year);
+            if (version == _version) _plan = plan;
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            if (version == _version) _error = $"Couldn't load the budget: {ex.Message}";
+        }
+    }
+
+    private async Task ChangeYearAsync(ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value as string, NumberStyles.Integer, CultureInfo.InvariantCulture, out var year)) return;
+        _year = year;
+        _plan = null;
+        Navigation.NavigateTo(year == Periods.Today.Year ? "budget" : $"budget?year={year}", replace: true);
+        await LoadAsync();
+    }
+
+    private async Task ShowYearlyAsync(bool yearly)
+    {
+        _yearly = yearly;
+        await Preferences.SetAsync(YearlyPreference, yearly);
+    }
+
+    private void Toggle(string category)
+    {
+        if (!_open.Remove(category)) _open.Add(category);
+    }
+
+    private static string Key(BudgetRow row) => $"{row.Category}|{row.SubCategory}";
+
+    // ---------------------------------------------------------------- amounts
+
+    /// <summary>
+    /// A year's amount as shown: per year, or per month a twelfth of it. A yearly line's amounts stay a
+    /// year's, marked "/yr", as it has no monthly share.
+    /// </summary>
+    private string Fmt(decimal? yearly, bool perYear) => yearly is not { } y ? ""
+        : _yearly ? Money.FormatWhole(y)
+        : perYear ? Money.FormatWhole(y) + " /yr"
+        : Money.FormatWhole(y / 12);
+
+    // Rows without a budget yet whose Yearly box was flipped from what's suggested for them.
+    private readonly HashSet<string> _flipped = [];
+
+    /// <summary>Whether a line is (or, without a budget yet, would be) kept for the year only.</summary>
+    private bool PerYear(BudgetRow row) => row.Target is not null ? row.Yearly : row.SuggestYearly ^ _flipped.Contains(Key(row));
+
+    private static string YearlyTitle(BudgetRow row) =>
+        "A budget for the whole year, with no monthly share" + (row.SuggestYearly ? ". Suggested, as its spending came in a few months only." : "");
+
+    /// <summary>The rows of the categories whose own line is (or isn't) yearly, details included.</summary>
+    private IReadOnlyList<BudgetRow> Group(bool perYear)
+    {
+        if (_plan is null) return [];
+        var categories = _plan.Rows.Where(r => r.SubCategory is null && PerYear(r) == perYear).Select(r => r.Category).ToHashSet();
+        return _plan.Rows.Where(r => categories.Contains(r.Category)).ToList();
+    }
+
+    private static decimal TotalOf(IEnumerable<BudgetRow> rows) => BudgetCalculator.Total(rows.Select(r => (r.Category, r.SubCategory, r.Target)));
+
+    private RenderFragment FooterRow(string label, IReadOnlyList<BudgetRow> rows, bool perYear)
+    {
+        var tops = rows.Where(r => r.SubCategory is null).ToList();
+        var total = TotalOf(rows);
+        var previous = BudgetCalculator.Total(rows.Select(r => (r.Category, r.SubCategory, r.PreviousTarget)));
+        var suggested = tops.Sum(r => r.SuggestionFor(PerYear(r)) ?? 0);
+        var basis = _plan?.Basis is { } b ? tops.Sum(r => r.BasisSpent) * 12 / b.Months : (decimal?)null;
+        var budgeted = BudgetedSpentOf(rows);
+        return @<tr class="fw-semibold">
+            <th scope="row">@label</th>
+            <td class="text-end">@Fmt(basis, perYear)</td>
+            <td class="text-end">@Fmt(suggested == 0 ? null : suggested, perYear)</td>
+            <td class="text-end">@Fmt(previous == 0 ? null : previous, perYear)</td>
+            <td class="text-end">@Fmt(total == 0 ? null : total, perYear)</td>
+            <td></td>
+            <td class="text-end">@Fmt(SpentShown(tops.Sum(r => r.Spent), perYear), perYear)</td>
+            <td>
+                @if (total > 0)
+                {
+                    <BudgetMeter Budget="total" Spent="budgeted" Pace="Pace" />
+                }
+            </td>
+        </tr>;
+    }
+
+    /// <summary>The share of the year counted so far: 1 for a past year, 0 for one that hasn't started.</summary>
+    private decimal YearShare => _plan is not { } p ? 1
+        : p.AsOf < new DateOnly(p.Year, 1, 1) ? 0
+        : (decimal)p.AsOf.DayOfYear / (DateTime.IsLeapYear(p.Year) ? 366 : 365);
+
+    /// <summary>Where spending would be by today at an even pace, as a share of the budget; null for a year that's over or not started.</summary>
+    private decimal? Pace => YearShare is > 0 and < 1 ? YearShare : null;
+
+    /// <summary>Spent so far as a year's amount for <see cref="Fmt"/>: as is, or per month the average month so far, as a year.</summary>
+    private decimal? SpentShown(decimal spent, bool perYear) => _yearly || perYear ? spent : YearShare > 0 ? spent / YearShare : null;
+
+    private string InputValue(BudgetRow row) =>
+        row.Target is { } y ? Math.Round(_yearly || PerYear(row) ? y : y / 12, 2).ToString("0.##", CultureInfo.InvariantCulture) : "";
+
+    /// <summary>A category's own budget, or its details' added up when it has none (a detail: its own).</summary>
+    private decimal? EffectiveTarget(BudgetRow row)
+    {
+        if (row.Target is not null || row.SubCategory is not null || _plan is null) return row.Target;
+        var subs = _plan.Rows.Where(r => r.Category == row.Category && r.SubCategory is not null && r.Target is > 0).ToList();
+        return subs.Count == 0 ? null : subs.Sum(r => r.Target!.Value);
+    }
+
+    /// <summary>What's been spent against these rows' budgets: each budgeted category's spending, or its budgeted details' when it has no budget of its own.</summary>
+    private static decimal BudgetedSpentOf(IReadOnlyList<BudgetRow> rows) => rows
+        .Where(r => r.Target is > 0 && (r.SubCategory is null || !rows.Any(o => o.Category == r.Category && o.SubCategory is null && o.Target is > 0)))
+        .Sum(r => r.Spent);
+
+    private decimal AllSpent => _plan?.Rows.Where(r => r.SubCategory is null).Sum(r => r.Spent) ?? 0;
+
+    private string? TotalDetail(decimal total, decimal previous, decimal yearlyPart)
+    {
+        if (total == 0) return "Fill in a category, or use the suggestions";
+        var unit = _yearly ? "a year" : "a month";
+        if (yearlyPart > 0) unit += $", plus {Money.FormatWhole(yearlyPart)} a year in yearly budgets";
+        if (previous == 0) return unit;
+        var change = (total - previous) / previous;
+        return $"{unit} · {(change >= 0 ? "+" : "−")}{Math.Abs(change).ToString("0.#%", CultureInfo.InvariantCulture)} on {_year - 1}'s";
+    }
+
+    private string? SpentDetail(decimal total)
+    {
+        if (IsFuture) return "The year hasn't started";
+        if (total == 0) return "In every spending category";
+        var share = BudgetedSpentOf(_plan?.Rows ?? []) / total;
+        var text = $"{share.ToString("0%", CultureInfo.InvariantCulture)} of the budget";
+        return Pace is { } pace ? $"{text}; {pace.ToString("0%", CultureInfo.InvariantCulture)} of the year gone" : text;
+    }
+
+    private string BasisHeading => _plan?.Basis is { IsCalendarYear: true } b
+        ? _yearly ? $"{b.From.Year} spent" : $"{b.From.Year} a month"
+        : _yearly ? "Spent a year" : "Spent a month";
+
+    private string? BasisTitle => _plan?.Basis is { } b
+        ? $"{Display.Date(b.From)} – {Display.Date(b.To)}{(b.IsCalendarYear ? "" : $": {b.Months} complete months, as a year")}"
+        : null;
+
+    private string BasisText()
+    {
+        var basis = _plan?.Basis;
+        if (basis is null) return "Suggestions need at least one complete month of transactions. Import some history, or fill in your own budgets.";
+        if (basis.IsCalendarYear) return $"Suggestions are {basis.From.Year}'s spending in each category, rounded up.";
+        var months = basis.Months == 1 ? "the one complete month" : $"the {basis.Months} complete months";
+        return $"There isn't a whole {_year - 1} to go by yet, so suggestions are {months} from {Display.Month(basis.From.Year, basis.From.Month)} to " +
+               $"{Display.Month(basis.To.Year, basis.To.Month)} counted as a year, rounded up. Seasonal costs may be missing.";
+    }
+
+    private string UncategorizedLink
+    {
+        get
+        {
+            var from = new DateOnly(_year, 1, 1);
+            var to = _plan?.AsOf ?? new DateOnly(_year, 12, 31);
+            return $"transactions?accountId=&category={Uri.EscapeDataString(Categories.Uncategorized)}&kind={CategoryKind.Expense}&from={Display.Iso(from)}&to={Display.Iso(to)}";
+        }
+    }
+
+    // ---------------------------------------------------------------- saving
+
+    /// <summary>Categories without a budget (of their own or by detail) that have a suggestion; the minor ones (Other) are left out.</summary>
+    private IReadOnlyList<BudgetRow> SuggestionsToUse
+    {
+        get
+        {
+            if (_plan is null) return [];
+            var minor = BudgetCalculator.MinorCategories(_plan);
+            return _plan.Rows
+                .Where(r => r.SubCategory is null && r.Target is null && r.SuggestionFor(PerYear(r)) is not null && EffectiveTarget(r) is null && !minor.Contains(r.Category))
+                .ToList();
+        }
+    }
+
+    /// <summary>Lines last year's budget had that this year's doesn't.</summary>
+    private IReadOnlyList<BudgetRow> PreviousToCopy => _plan is null ? [] : _plan.Rows
+        .Where(r => r.Target is null && r.PreviousTarget is not null)
+        .ToList();
+
+    private Task UseSuggestionsAsync() =>
+        SetAsync(SuggestionsToUse.Select(r => new BudgetLineRequest(r.Category, null, r.SuggestionFor(PerYear(r)), PerYear(r))).ToList());
+
+    private Task CopyPreviousAsync() =>
+        SetAsync(PreviousToCopy.Select(r => new BudgetLineRequest(r.Category, r.SubCategory, r.PreviousTarget, r.PreviousYearly)).ToList());
+
+    private Task SaveAsync(BudgetRow row, decimal yearly) =>
+        SetAsync([new BudgetLineRequest(row.Category, row.SubCategory, yearly, PerYear(row))]);
+
+    /// <summary>The Yearly box: changes a budget's kind, or (before it has one) what it'll be.</summary>
+    private Task ToggleYearlyAsync(BudgetRow row)
+    {
+        if (row.Target is { } amount) return SetAsync([new BudgetLineRequest(row.Category, row.SubCategory, amount, !row.Yearly)]);
+        if (!_flipped.Remove(Key(row))) _flipped.Add(Key(row));
+        return Task.CompletedTask;
+    }
+
+    private Task ChangeAsync(BudgetRow row, ChangeEventArgs e)
+    {
+        var text = (e.Value as string ?? "").Replace("CA$", "").Replace("$", "").Replace(",", "").Trim();
+        if (text.Length == 0) return SetAsync([new BudgetLineRequest(row.Category, row.SubCategory, null)]);
+        if (!decimal.TryParse(text, NumberStyles.Number, CultureInfo.InvariantCulture, out var amount) || amount < 0)
+        {
+            _error = $"Enter the budget for {Categories.Label(row.Category, row.SubCategory)} as an amount, such as 450.";
+            return Task.CompletedTask;
+        }
+
+        var perYear = PerYear(row);
+        return SetAsync([new BudgetLineRequest(row.Category, row.SubCategory, _yearly || perYear ? amount : amount * 12, perYear)]);
+    }
+
+    private async Task SetAsync(IReadOnlyList<BudgetLineRequest> lines)
+    {
+        if (_plan is null || lines.Count == 0) return;
+        (_busy, _error) = (true, null);
+        try
+        {
+            var targets = await Store.SetBudgetAsync(_year, new SetBudgetRequest(lines));
+            var saved = targets.ToDictionary(t => (t.Category, t.SubCategory));
+            _plan = _plan with
+            {
+                Rows = _plan.Rows.Select(r => saved.TryGetValue((r.Category, r.SubCategory), out var t)
+                    ? r with { Target = t.Amount, Yearly = t.Yearly }
+                    : r with { Target = null, Yearly = false }).ToList(),
+            };
+            _flipped.RemoveWhere(key => saved.Keys.Any(k => $"{k.Category}|{k.SubCategory}" == key));
+        }
+        catch (Exception ex) when (ex is LedgerStoreException or HttpRequestException)
+        {
+            _error = $"Couldn't save the budget: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+}

@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using MapleLedger.Core;
+using MapleLedger.Core.Budgets;
 using MapleLedger.Core.Categorization;
 using MapleLedger.Core.Investments;
 using MapleLedger.Core.RealEstate;
@@ -208,6 +209,21 @@ public sealed class ServerLedgerStore(HttpClient http) : ILedgerStore
 
     public async Task<ExchangeRate> SetExchangeRateAsync(ExchangeRate rate) =>
         await Read<ExchangeRate>(await Send(HttpMethod.Put, $"api/exchange-rates/{Uri.EscapeDataString(rate.Currency)}", rate));
+
+    public Task<IReadOnlyList<MonthlyExchangeRate>> GetMonthlyExchangeRatesAsync(CancellationToken ct = default) =>
+        Get<IReadOnlyList<MonthlyExchangeRate>>("api/monthly-exchange-rates", ct);
+
+    public async Task<ApplyMonthlyExchangeRatesResult> ApplyMonthlyExchangeRatesAsync(ApplyMonthlyExchangeRatesRequest request) =>
+        await Read<ApplyMonthlyExchangeRatesResult>(await Send(HttpMethod.Post, "api/monthly-exchange-rates", request));
+
+    public Task<BudgetPlan> GetBudgetPlanAsync(int year, CancellationToken ct = default) =>
+        Get<BudgetPlan>($"api/budgets/{year}", ct);
+
+    public async Task<IReadOnlyList<BudgetTarget>> SetBudgetAsync(int year, SetBudgetRequest request) =>
+        await Read<IReadOnlyList<BudgetTarget>>(await Send(HttpMethod.Put, $"api/budgets/{year}", request));
+
+    public Task<IReadOnlyList<BudgetMonth>> GetBudgetMonthsAsync(int fromYear, int toYear, CancellationToken ct = default) =>
+        Get<IReadOnlyList<BudgetMonth>>($"api/budgets/months?fromYear={fromYear}&toYear={toYear}", ct);
 
     public Task<IReadOnlyList<RealEstateProperty>> GetPropertiesAsync(CancellationToken ct = default) =>
         Get<IReadOnlyList<RealEstateProperty>>("api/properties", ct);

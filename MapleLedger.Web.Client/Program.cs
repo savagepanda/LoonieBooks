@@ -50,6 +50,7 @@ builder.Services.AddScoped<ExchangeRateFeed>();
 builder.Services.AddScoped<QuoteFeed>();
 builder.Services.AddScoped<HpiFeed>();
 builder.Services.AddScoped<PriceHistoryFeed>();
+builder.Services.AddScoped<MonthlyRateFeed>();
 builder.Services.AddScoped<SampleLedger>();
 builder.Services.AddScoped<ListingRequests>();
 builder.Services.AddSingleton(new TransactionCategorizer());

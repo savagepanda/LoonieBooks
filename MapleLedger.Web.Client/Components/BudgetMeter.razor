@@ -1,0 +1,47 @@
+@* A budget line's spending against its budget: the budget is the track (faded), spending within it
+   fills it, spending over it runs on in red past a gap, and a tick marks where spending would be by
+   today at an even pace. The percentage beside it is of the whole budget. *@
+<span class="budget-meter-wrap" title="@Title">
+    <span class="budget-meter" aria-hidden="true">
+        <span class="budget-meter-track" style="width: @Percent(Budget)"></span>
+        <span class="budget-meter-spent" style="width: @Percent(Math.Min(Spent, Budget))"></span>
+        @if (Spent > Budget)
+        {
+            <span class="budget-meter-over" style="left: calc(@Percent(Budget) + 2px); width: calc(@Percent(Spent - Budget) - 2px)"></span>
+        }
+        @if (Pace is { } pace)
+        {
+            <span class="budget-meter-pace" style="left: @Percent(Budget * pace)"></span>
+        }
+    </span>
+    <span class="budget-meter-text">@Share</span>
+</span>
+
+@code {
+    /// <summary>The year's budget.</summary>
+    [Parameter, EditorRequired] public decimal Budget { get; set; }
+
+    [Parameter, EditorRequired] public decimal Spent { get; set; }
+
+    /// <summary>The share of the year gone, for a year under way; null otherwise.</summary>
+    [Parameter] public decimal? Pace { get; set; }
+
+    private decimal Scale => Math.Max(Budget, Math.Max(0, Spent));
+
+    private string Percent(decimal amount) =>
+        (Scale <= 0 ? 0 : Math.Clamp(amount / Scale, 0, 1) * 100).ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) + "%";
+
+    private string Share => Budget <= 0 ? "" : (Spent / Budget).ToString("0%", System.Globalization.CultureInfo.InvariantCulture);
+
+    private string Title
+    {
+        get
+        {
+            var text = Spent <= Budget
+                ? $"{Money.Format(Spent)} of {Money.Format(Budget)} spent, {Money.Format(Budget - Spent)} left"
+                : $"{Money.Format(Spent)} spent, {Money.Format(Spent - Budget)} over the {Money.Format(Budget)} budget";
+            if (Pace is { } pace) text += $". At an even pace it would be {Money.Format(Budget * pace)} by today";
+            return text + ".";
+        }
+    }
+}

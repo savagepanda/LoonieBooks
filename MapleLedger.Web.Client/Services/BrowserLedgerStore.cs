@@ -1,4 +1,5 @@
 using MapleLedger.Core;
+using MapleLedger.Core.Budgets;
 using MapleLedger.Core.Categorization;
 using MapleLedger.Core.Investments;
 using MapleLedger.Core.RealEstate;
@@ -120,6 +121,16 @@ public sealed class BrowserLedgerStore(
     public Task<IReadOnlyList<ExchangeRate>> GetExchangeRatesAsync(CancellationToken ct = default) => Run(l => l.GetExchangeRatesAsync(ct));
 
     public Task<ExchangeRate> SetExchangeRateAsync(ExchangeRate rate) => Run(l => l.SetExchangeRateAsync(rate));
+
+    public Task<IReadOnlyList<MonthlyExchangeRate>> GetMonthlyExchangeRatesAsync(CancellationToken ct = default) => Run(l => l.GetMonthlyExchangeRatesAsync(ct));
+
+    public Task<ApplyMonthlyExchangeRatesResult> ApplyMonthlyExchangeRatesAsync(ApplyMonthlyExchangeRatesRequest request) => Run(l => l.ApplyMonthlyExchangeRatesAsync(request));
+
+    public Task<BudgetPlan> GetBudgetPlanAsync(int year, CancellationToken ct = default) => Run(l => l.GetBudgetPlanAsync(year, ct));
+
+    public Task<IReadOnlyList<BudgetTarget>> SetBudgetAsync(int year, SetBudgetRequest request) => Run(l => l.SetBudgetAsync(year, request));
+
+    public Task<IReadOnlyList<BudgetMonth>> GetBudgetMonthsAsync(int fromYear, int toYear, CancellationToken ct = default) => Run(l => l.GetBudgetMonthsAsync(fromYear, toYear, ct));
 
     public Task<IReadOnlyList<RealEstateProperty>> GetPropertiesAsync(CancellationToken ct = default) => Run(l => l.GetPropertiesAsync(ct));
 

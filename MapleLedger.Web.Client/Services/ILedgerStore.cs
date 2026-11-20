@@ -1,4 +1,5 @@
 using MapleLedger.Core;
+using MapleLedger.Core.Budgets;
 using MapleLedger.Core.Categorization;
 using MapleLedger.Core.Investments;
 using MapleLedger.Core.RealEstate;
@@ -127,6 +128,21 @@ public interface ILedgerStore
 
     /// <summary>Sets the ledger's rate for a currency, revaluing the holdings in it.</summary>
     Task<ExchangeRate> SetExchangeRateAsync(ExchangeRate rate);
+
+    /// <summary>The Bank of Canada's monthly average rates saved for the accounts' currencies.</summary>
+    Task<IReadOnlyList<MonthlyExchangeRate>> GetMonthlyExchangeRatesAsync(CancellationToken ct = default);
+
+    /// <summary>Saves monthly average rates, which spending in other currencies is converted at.</summary>
+    Task<ApplyMonthlyExchangeRatesResult> ApplyMonthlyExchangeRatesAsync(ApplyMonthlyExchangeRatesRequest request);
+
+    /// <summary>The year's budget beside its spending, last year's budget and the suggestions.</summary>
+    Task<BudgetPlan> GetBudgetPlanAsync(int year, CancellationToken ct = default);
+
+    /// <summary>Sets (or, with no amount, removes) lines of the year's budget; returns the year's lines.</summary>
+    Task<IReadOnlyList<BudgetTarget>> SetBudgetAsync(int year, SetBudgetRequest request);
+
+    /// <summary>Each month of the years, up to this one: every budget line's share and the month's spending.</summary>
+    Task<IReadOnlyList<BudgetMonth>> GetBudgetMonthsAsync(int fromYear, int toYear, CancellationToken ct = default);
 
     Task<IReadOnlyList<RealEstateProperty>> GetPropertiesAsync(CancellationToken ct = default);
     Task<RealEstateProperty> CreatePropertyAsync(PropertyRequest request);

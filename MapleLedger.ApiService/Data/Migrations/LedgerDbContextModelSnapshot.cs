@@ -96,6 +96,43 @@ namespace MapleLedger.ApiService.Data.Migrations
                     b.ToTable("Tags", (string)null);
                 });
 
+            modelBuilder.Entity("MapleLedger.Data.BudgetRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(19, 4)
+                        .HasColumnType("decimal(19,4)");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("OwnerId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("SubCategory")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<int>("Year")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("Yearly")
+                        .HasColumnType("bit");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OwnerId", "Year");
+
+                    b.ToTable("Budgets", (string)null);
+                });
+
             modelBuilder.Entity("MapleLedger.Data.ExchangeRateRecord", b =>
                 {
                     b.Property<Guid>("Id")
@@ -305,6 +342,36 @@ namespace MapleLedger.ApiService.Data.Migrations
                     b.HasIndex("Email");
 
                     b.ToTable("Users", (string)null);
+                });
+
+            modelBuilder.Entity("MapleLedger.Data.MonthlyExchangeRateRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("nvarchar(3)");
+
+                    b.Property<DateTimeOffset>("Month")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("OwnerId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<decimal>("Rate")
+                        .HasPrecision(19, 8)
+                        .HasColumnType("decimal(19,8)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OwnerId");
+
+                    b.ToTable("MonthlyExchangeRates", (string)null);
                 });
 
             modelBuilder.Entity("MapleLedger.Data.PriceHistoryRecord", b =>

@@ -121,6 +121,18 @@ tunnel or VPN you control.
 - **Dashboard.** Income, spending, net cash flow, net worth, monthly income vs spending, and
   spending and income by top-level category, each expandable (one at a time) into its details.
   Clicking a month or category shows its transactions beside the chart, with a link to the full list.
+  Totals are in Canadian dollars: income and spending in accounts kept in other currencies are
+  converted at the Bank of Canada's monthly average rate for their month (its Valet `FXM…CAD` series,
+  fetched by the browser and saved in the ledger's `MonthlyExchangeRates`), or the latest rate for the
+  month under way.
+- **Budget.** A yearly budget per spending category or detail (`Budgets` table, one row per year and
+  line, in backups), suggested from last calendar year's spending or, without a whole year yet, the
+  latest complete months counted as a year, rounded up. The Budget page shows amounts per month or per
+  year beside last year's budget and this year's spending. A line can be yearly-only (no monthly
+  share), suggested for spending that comes in a few months; categories under 1% of spending sit under
+  Other. The dashboard's *Budget vs spending by month* chart shows each month against a twelfth of the
+  budget, for the whole household or one category; *Budget status* shows each category against its
+  monthly budget for a month, or its whole budget for the year so far. The maths is `BudgetCalculator` in `MapleLedger.Core`.
 - **Investment holdings.** Investment accounts keep a snapshot of what they hold (symbol, units,
   price, market and book value) from the broker's holdings report, CSV or pasted, rather than every
   trade: trades inside an account aren't spending or income. Each import replaces the snapshot and

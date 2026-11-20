@@ -25,6 +25,12 @@
             picked. With accounts picked, a property counts when one of its loans is among them.</li>
     </ul>
     <p>
+        Everything is in Canadian dollars. Income and spending in an account kept in another currency (a US dollar card, say) are
+        converted at the Bank of Canada's average rate for the month they happened in, or at the latest rate for the month under
+        way, so a past month's figures don't move when the dollar does. LoonieBooks fetches those monthly rates for your accounts'
+        currencies (only the currency is sent).
+    </p>
+    <p>
         With investment holdings, a line under the totals says when their prices were last updated from stocktreemap.com (the
         time of stocktreemap's prices, and when LoonieBooks last checked) and how many holdings were updated. A yellow note lists
         any that weren't, with the reason: a mutual fund code, a symbol the price list doesn't carry, a price that doesn't look
@@ -64,6 +70,25 @@
         how), since it's not your broker's figures. For a loan, line of credit or card, the line is what's owed. An account
         without a balance has nothing to work back from: set its balance on the <a href="accounts">Accounts</a> page first.
     </p>
+    <p>
+        Two charts measure spending against the budgets you set on the <a href="budget">Budget</a> page. In both, each column is
+        as tall as the budget or the spending, whichever is more: green is spending within the budget, faded green is what's left
+        of it, red is spending over it, and a short line marks where spending would be by today at an even pace. Hover over a
+        column for the numbers. Budgets are the household's, so these charts cover every account and tag, whatever the dashboard
+        is narrowed to. See <a href="help?a=budget">Budget</a>.
+    </p>
+    <ul>
+        <li><strong>Budget vs spending by month</strong>, the step after income and spending: each month of the period against a
+            twelfth of its year's budget, leaving out budgets kept for the year only (tuition, tax instalments), which a month's
+            tooltip lists instead, with the categories that went over and spending no budget covers. Pick a category in the
+            Spending list first and it shows that category's budget. Click a month to list its transactions.</li>
+        <li><strong>Budget status</strong>, the step after that: one column per budgeted category, largest budget first, each
+            drawn against its own budget (100%), so a small budget reads as clearly as a large one and red past 100% is over. The
+            amounts are in each column's tooltip, and what was spent without a budget is beside the legend. <span class="help-ui">Month</span>
+            compares the month you picked (or the period's last) with each category's monthly budget; yearly-only budgets
+            aren't in it. <span class="help-ui">Year</span> compares that year so far with each category's whole budget, yearly
+            ones included. Click a category to list its transactions, as in the Spending list. Month or Year is remembered.</li>
+    </ul>
 
     <h3>By category or account, and your holdings</h3>
     <ul>
@@ -76,8 +101,8 @@
         <li><strong>By category</strong> or <strong>By account</strong>, at the top right, picks how Spending and Income are added
             up: by category, or by the account the money came in to or went out of (your credit card, your chequing account…).
             Refunds reduce spending on the account they came back to, and transfers between your accounts are left out. Accounts
-            aren't clickable; to see one account's transactions, pick it under <strong>Accounts</strong>. Amounts are added up as
-            recorded, in each account's own currency.</li>
+            aren't clickable; to see one account's transactions, pick it under <strong>Accounts</strong>. Amounts are in Canadian
+            dollars, other currencies at their month's rate.</li>
         <li><strong>Assets</strong> values your investment holdings in Canadian dollars, from each account's latest import on
             <a href="holdings">Holdings</a>. <strong>By holding</strong> adds up each holding (by symbol) across your accounts;
             <strong>By account</strong> adds up each account's holdings instead (the same button as for Spending and Income). It follows the accounts you picked, but not the

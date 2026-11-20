@@ -104,6 +104,7 @@ h1:focus {
     --viz-cat-7: #6250d6;
     --viz-cat-8: #e34948;
     --viz-cat-other: #a3a29c;
+    --viz-status-critical: #d03b3b; /* over budget: the status palette's critical, the same in both modes */
 }
 
 [data-bs-theme="dark"] {
@@ -176,6 +177,32 @@ h1:focus {
 .viz-spending { background: var(--viz-series-2); }
 .viz-income-bar { fill: var(--viz-series-1); }
 .viz-spending-bar { fill: var(--viz-series-2); }
+.viz-budget-spent, .viz-budget-left { background: var(--viz-cat-3); }
+.viz-budget-left { opacity: 0.3; }
+.viz-budget-over { background: var(--viz-status-critical); }
+.viz-budget-spent-bar { fill: var(--viz-cat-3); }
+.viz-budget-left-bar { fill: var(--viz-cat-3); fill-opacity: 0.3; }
+.viz-budget-over-bar { fill: var(--viz-status-critical); }
+.viz-budget-none-bar { fill: var(--viz-cat-other); }
+.viz-pace { stroke: var(--bs-body-color); stroke-width: 2; stroke-linecap: round; pointer-events: none; }
+.viz-pace-key { display: inline-block; width: 12px; height: 2px; background: var(--bs-body-color); margin-right: 0.35rem; vertical-align: middle; }
+/* The budget page: a meter per line (BudgetMeter), in the budget chart's colors. */
+.budget-table .budget-input-col { width: 8.5rem; }
+.budget-table .budget-input { min-width: 6.5rem; }
+.budget-table .budget-progress-col { width: 9rem; }
+.budget-table .budget-sub > th, .budget-table .budget-sub > td { font-size: 0.875rem; }
+.budget-table .budget-indent { padding-left: 1.6rem; }
+.budget-table td, .budget-table th[scope="row"] { white-space: nowrap; }
+.budget-table .budget-other-item > th { padding-left: 1.6rem; }
+.budget-caret { display: inline-block; width: 1rem; color: var(--bs-secondary-color); }
+.budget-meter-wrap { display: inline-flex; align-items: center; gap: 0.4rem; width: 100%; }
+.budget-meter { position: relative; flex: 1 1 auto; min-width: 3rem; height: 8px; }
+.budget-meter > span { position: absolute; top: 0; bottom: 0; left: 0; border-radius: 2px; }
+.budget-meter-track { background: var(--viz-cat-3); opacity: 0.3; }
+.budget-meter-spent { background: var(--viz-cat-3); }
+.budget-meter-over { background: var(--viz-status-critical); }
+.budget-meter > .budget-meter-pace { top: -3px; bottom: -3px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--bs-body-color); }
+.budget-meter-text { flex: 0 0 2.75rem; text-align: right; font-size: 0.8rem; color: var(--bs-secondary-color); font-variant-numeric: tabular-nums; }
 .viz-networth-line { fill: none; stroke: var(--viz-cat-3); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; pointer-events: none; }
 .viz-networth-dot { fill: var(--viz-cat-3); stroke: var(--bs-card-bg, var(--bs-body-bg)); stroke-width: 2; pointer-events: none; }
 .viz-grid { stroke: var(--viz-grid); stroke-width: 1; }
@@ -662,6 +689,7 @@ button.category-toggle:hover { color: var(--bs-body-color); }
 .help-icon-help { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z'/%3E%3Cpath d='M5.255 5.786a.237.237 0 0 0 .241.247h.825c.138 0 .248-.113.266-.25.09-.656.54-1.134 1.342-1.134.686 0 1.314.343 1.314 1.168 0 .635-.374.927-.965 1.371-.673.489-1.206 1.06-1.168 1.987l.003.217a.25.25 0 0 0 .25.246h.811a.25.25 0 0 0 .25-.25v-.105c0-.718.273-.927 1.01-1.486.609-.463 1.244-.977 1.244-2.056 0-1.511-1.276-2.326-3.022-2.326-1.205 0-2.533.538-2.68 2.115zm1.919 5.469c0 .533.425.927 1.01.927.609 0 1.028-.394 1.028-.927 0-.552-.42-.94-1.029-.94-.584 0-1.009.388-1.009.94z'/%3E%3C/svg%3E"); }
 .help-icon-start { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill-rule='evenodd' d='M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm0 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1ZM6 4.5l5 3.5-5 3.5v-7Z'/%3E%3C/svg%3E"); }
 .help-icon-house { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M6.5 14.5v-3.505c0-.245.25-.495.5-.495h2c.25 0 .5.25.5.5v3.5a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5v-7a.5.5 0 0 0-.146-.354L13 5.793V2.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v1.293L8.354 1.146a.5.5 0 0 0-.708 0l-6 6A.5.5 0 0 0 1.5 7.5v7a.5.5 0 0 0 .5.5h4a.5.5 0 0 0 .5-.5Z'/%3E%3C/svg%3E"); }
+.help-icon-budget { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill-rule='evenodd' d='M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0Zm0 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM8 3a5 5 0 1 1 0 10A5 5 0 0 1 8 3Zm0 1.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7ZM8 6a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z'/%3E%3C/svg%3E"); }
 .help-icon-bank { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1 1 4.5V6h14V4.5L8 1ZM2.5 7h2v5h-2V7Zm4.5 0h2v5H7V7Zm4.5 0h2v5h-2V7ZM1 13h14v2H1v-2Z'/%3E%3C/svg%3E"); }
 .help-icon-import { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2H2zm6.5 4.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3a.5.5 0 0 1 1 0z'/%3E%3C/svg%3E"); }
 .help-icon-pie { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M7 1.05A7 7 0 1 0 14.95 9H7V1.05ZM9 0v7h7A7 7 0 0 0 9 0Z'/%3E%3C/svg%3E"); }

@@ -81,6 +81,12 @@ public static class HelpCatalog
             ["dashboard", "home", "income", "spending", "expenses", "cash flow", "savings rate", "net worth", "chart", "month", "pie", "bars", "period", "year to date", "summary", "liabilities", "debt", "owed", "property equity"],
             typeof(DashboardArticle)),
 
+        new("budget", "Budget", CategoryOrganizing, "budget",
+            "Setting a budget for each spending category from last year's spending, and following it on the dashboard.",
+            "/budget", "the budget",
+            ["budget", "budgets", "budgeting", "target", "limit", "plan", "planning", "suggest", "suggestion", "average", "over budget", "overspending", "left", "pace", "year over year", "yoy", "per month", "per year", "monthly", "yearly", "annual", "exchange rate", "currency"],
+            typeof(BudgetArticle)),
+
         new("transactions", "Transactions", CategoryOrganizing, "list",
             "Finding transactions by date, account, category, tag or text, and changing a whole list at once.",
             "/transactions", "transactions",
@@ -162,6 +168,7 @@ public static class HelpCatalog
         ["/import"] = "import",
         ["/duplicates"] = "undo-duplicates",
         ["/transactions"] = "transactions",
+        ["/budget"] = "budget",
         ["/categories"] = "categorizing",
         ["/tags"] = "tags",
         ["/tax"] = "tax-report",

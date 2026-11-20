@@ -16,7 +16,7 @@ namespace MapleLedger.ApiService.Data;
 public static class SqlServerImport
 {
     /// <summary>The tables with an owner, parents before children.</summary>
-    private static readonly string[] OwnedTables = ["Accounts", "ImportBatches", "Transactions", "Receipts", "HouseholdMembers", "CustomCategories", "Tags", "TaxSituations", "Holdings", "ExchangeRates", "Properties", "HousePriceIndex", "PriceHistory"];
+    private static readonly string[] OwnedTables = ["Accounts", "ImportBatches", "Transactions", "Receipts", "HouseholdMembers", "CustomCategories", "Tags", "TaxSituations", "Holdings", "ExchangeRates", "Properties", "HousePriceIndex", "PriceHistory", "MonthlyExchangeRates", "Budgets"];
 
     public sealed record Result(bool Copied, IReadOnlyDictionary<string, int> Rows);
 
@@ -60,6 +60,8 @@ public static class SqlServerImport
             await CopyAsync(source.Properties, source, target, ct);
             await CopyAsync(source.HousePriceIndex, source, target, ct);
             await CopyAsync(source.PriceHistory, source, target, ct);
+            await CopyAsync(source.MonthlyExchangeRates, source, target, ct);
+            await CopyAsync(source.Budgets, source, target, ct);
         }
 
         await using (var source = new LedgerDbContext(sourceOptions))

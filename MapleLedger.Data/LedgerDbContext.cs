@@ -69,6 +69,8 @@ public sealed class LedgerDbContext(DbContextOptions<LedgerDbContext> options) :
     public DbSet<PropertyRecord> Properties => Set<PropertyRecord>();
     public DbSet<HpiRecord> HousePriceIndex => Set<HpiRecord>();
     public DbSet<PriceHistoryRecord> PriceHistory => Set<PriceHistoryRecord>();
+    public DbSet<MonthlyExchangeRateRecord> MonthlyExchangeRates => Set<MonthlyExchangeRateRecord>();
+    public DbSet<BudgetRecord> Budgets => Set<BudgetRecord>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
@@ -284,6 +286,28 @@ public sealed class LedgerDbContext(DbContextOptions<LedgerDbContext> options) :
             reading.HasQueryFilter(r => EF.Property<string>(r, Owner) == OwnerId);
         });
 
+        modelBuilder.Entity<MonthlyExchangeRateRecord>(rate =>
+        {
+            rate.ToTable("MonthlyExchangeRates");
+            rate.HasKey(r => r.Id);
+            rate.Property(r => r.Currency).HasMaxLength(3);
+            rate.Property(r => r.Rate).HasPrecision(19, 8);
+            rate.Property<string>(Owner).HasMaxLength(64).IsRequired();
+            rate.HasIndex(Owner);
+            rate.HasQueryFilter(r => EF.Property<string>(r, Owner) == OwnerId);
+        });
+
+        modelBuilder.Entity<BudgetRecord>(budget =>
+        {
+            budget.ToTable("Budgets");
+            budget.HasKey(b => b.Id);
+            budget.Property(b => b.Category).HasMaxLength(64);
+            budget.Property(b => b.SubCategory).HasMaxLength(64);
+            budget.Property<string>(Owner).HasMaxLength(64).IsRequired();
+            budget.HasIndex(Owner, nameof(BudgetRecord.Year));
+            budget.HasQueryFilter(b => EF.Property<string>(b, Owner) == OwnerId);
+        });
+
         modelBuilder.Entity<LedgerUser>(user =>
         {
             user.ToTable("Users");
@@ -435,6 +459,32 @@ public sealed class PriceHistoryRecord
     public required string Currency { get; set; }
     public DateTimeOffset Month { get; set; }
     public decimal Close { get; set; }
+}
+
+/// <summary>
+/// A currency's average rate over a month (<see cref="MapleLedger.Core.Investments.MonthlyExchangeRate"/>), from
+/// the Bank of Canada; <see cref="Month"/> is the month's first day, UTC. Spending in other currencies is
+/// converted at its month's rate.
+/// </summary>
+public sealed class MonthlyExchangeRateRecord
+{
+    public Guid Id { get; set; }
+    public required string Currency { get; set; }
+    public DateTimeOffset Month { get; set; }
+    public decimal Rate { get; set; }
+}
+
+/// <summary>A year's budget for a category, or one of its details (<see cref="MapleLedger.Core.Budgets.BudgetTarget"/>).</summary>
+public sealed class BudgetRecord
+{
+    public Guid Id { get; set; }
+    public int Year { get; set; }
+    public required string Category { get; set; }
+    public string? SubCategory { get; set; }
+    public decimal Amount { get; set; }
+
+    /// <summary>Kept for the year only, with no monthly share (<see cref="MapleLedger.Core.Budgets.BudgetTarget.Yearly"/>).</summary>
+    public bool Yearly { get; set; }
 }
 
 /// <summary>

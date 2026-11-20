@@ -2,6 +2,7 @@ using System.Text;
 using MapleLedger.ApiService.Receipts;
 using MapleLedger.ApiService.Users;
 using MapleLedger.Core;
+using MapleLedger.Core.Budgets;
 using MapleLedger.Core.Investments;
 using MapleLedger.Core.RealEstate;
 using MapleLedger.Core.Tax;
@@ -209,6 +210,18 @@ public static class LedgerEndpoints
 
         api.MapPut("/exchange-rates/{currency}", async (LedgerService ledger, string currency, ExchangeRate rate, CancellationToken ct) =>
             Results.Ok(await ledger.SetExchangeRateAsync(rate with { Currency = currency }, ct)));
+
+        // The Bank of Canada's monthly averages, which the browser fetched for the accounts' currencies.
+        api.MapGet("/monthly-exchange-rates", (LedgerService ledger, CancellationToken ct) => ledger.GetMonthlyExchangeRatesAsync(ct));
+        api.MapPost("/monthly-exchange-rates", async (LedgerService ledger, ApplyMonthlyExchangeRatesRequest request, CancellationToken ct) =>
+            Results.Ok(await ledger.ApplyMonthlyExchangeRatesAsync(request, ct)));
+
+        api.MapGet("/budgets/months", (LedgerService ledger, int fromYear, int toYear, CancellationToken ct) => ledger.GetBudgetMonthsAsync(fromYear, toYear, ct));
+
+        api.MapGet("/budgets/{year:int}", (LedgerService ledger, int year, CancellationToken ct) => ledger.GetBudgetPlanAsync(year, ct));
+
+        api.MapPut("/budgets/{year:int}", async (LedgerService ledger, int year, SetBudgetRequest request, CancellationToken ct) =>
+            Results.Ok(await ledger.SetBudgetAsync(year, request, ct)));
 
         api.MapGet("/properties", (LedgerService ledger, CancellationToken ct) => ledger.GetPropertiesAsync(ct));
 

@@ -94,6 +94,7 @@ public sealed record TransactionFilter(
 /// <param name="ExchangeRates">The rates holdings in other currencies are valued at (optional; older backups have none).</param>
 /// <param name="Properties">Real estate, with the accounts secured by each (optional; older backups have none).</param>
 /// <param name="HousePriceIndex">House price index readings that carry the properties' values forward (optional).</param>
+/// <param name="Budgets">Each year's budget lines (optional; older backups have none).</param>
 public sealed record LedgerBackup(
     int Version,
     DateTimeOffset ExportedAt,
@@ -108,7 +109,8 @@ public sealed record LedgerBackup(
     IReadOnlyList<Investments.HoldingsSnapshot>? Holdings = null,
     IReadOnlyList<Investments.ExchangeRate>? ExchangeRates = null,
     IReadOnlyList<RealEstate.RealEstateProperty>? Properties = null,
-    IReadOnlyList<RealEstate.HpiReading>? HousePriceIndex = null)
+    IReadOnlyList<RealEstate.HpiReading>? HousePriceIndex = null,
+    IReadOnlyList<Budgets.BudgetTarget>? Budgets = null)
 {
     public const int CurrentVersion = 2;
 }

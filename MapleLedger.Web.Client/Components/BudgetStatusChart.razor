@@ -1,0 +1,221 @@
+@* Each budgeted category against its budget: one column per budget line (drawn by BudgetBars), the
+   largest budget first. The scale is each column's own budget (100%), so a CA$50 budget reads as well
+   as a CA$2,000 one and red past 100% is over; the amounts are in the tooltips. Month compares a month's
+   spending with each line's monthly share (yearly-only lines have none, so they're left out); Year
+   compares the year's spending so far with each line's whole budget. A tick marks an even pace for the
+   month or year under way. Spending no budget covers is noted beside the legend. Clicking a category
+   picks it on the dashboard (clicking it again clears it). Budgets cover the whole household: the
+   dashboard's account and tag filters don't apply. *@
+
+<div class="viz-root">
+    <div class="viz-head">
+        <h2 class="h6 card-title mb-0">@Title</h2>
+        @HeaderContent
+    </div>
+    <div class="viz-subline viz-legend" aria-hidden="true">
+        @if (Message is null && _message is null)
+        {
+            <span><span class="viz-swatch viz-budget-spent"></span>Spent</span>
+            <span><span class="viz-swatch viz-budget-left"></span>Left</span>
+            <span><span class="viz-swatch viz-budget-over"></span>Over</span>
+            @if (_bars.Any(b => b.Pace is not null))
+            {
+                <span><span class="viz-pace-key"></span>Even pace</span>
+            }
+            @if (_note is not null)
+            {
+                <span class="text-truncate">@_note</span>
+            }
+        }
+    </div>
+
+    @if ((Message ?? _message) is { } message)
+    {
+        <div class="viz-placeholder">
+            <div class="@(MessageIsError ? "alert alert-danger py-2 mb-0" : "text-body-secondary")">
+                @message
+                @if (!MessageIsError && Message is null && _linkToBudget)
+                {
+                    <a href="budget">Set budgets</a>
+                }
+            </div>
+        </div>
+    }
+    else
+    {
+        <svg class="viz-svg" viewBox="0 0 @Width @Height" role="img" aria-label="@($"Budget status by category, {When}")">
+            @foreach (var tick in _ticks)
+            {
+                var y = Y(tick);
+                <line class="viz-grid" x1="@Display.Svg(Left)" x2="@Display.Svg(Width - Right)" y1="@Display.Svg(y)" y2="@Display.Svg(y)" />
+                @IncomeExpenseChart.Label(Left - 8, y + 4, "end", tick.ToString("0%", System.Globalization.CultureInfo.InvariantCulture))
+            }
+
+            @for (var i = 0; i < _bars.Count; i++)
+            {
+                var bar = _bars[i];
+                var bandX = Left + i * Band;
+                var x = bandX + (Band - BarWidth) / 2;
+                var selectable = OnSelect.HasDelegate;
+                var selected = Selected is { } s && s.Category == bar.Line.Category && s.SubCategory == bar.Line.SubCategory;
+                <g class="viz-band @(selectable ? "viz-link" : "") @(selected ? "is-selected" : "")" role="@(selectable ? "button" : null)" tabindex="@(selectable ? "0" : null)"
+                   aria-pressed="@(selectable ? (selected ? "true" : "false") : null)"
+                   @onclick="() => Select(bar)" @onkeydown="e => SelectOnEnter(e, bar)">
+                    <title>@bar.Tooltip@(!selectable ? "" : selected ? " Show every category again." : " Show its transactions.")</title>
+                    <rect class="viz-hit" x="@Display.Svg(bandX)" y="@Display.Svg(Top)" width="@Display.Svg(Band)" height="@Display.Svg(PlotHeight)" />
+                    @foreach (var segment in BudgetBars.Segments(1, bar.Spent / bar.Budget))
+                    {
+                        <path class="@segment.Class" d="@BudgetBars.Path(segment, x, BarWidth, Y)" />
+                    }
+                    @if (bar.Pace is { } pace && pace > 0)
+                    {
+                        var py = Y(pace / bar.Budget);
+                        <line class="viz-pace" x1="@Display.Svg(x - 4)" x2="@Display.Svg(x + BarWidth + 4)" y1="@Display.Svg(py)" y2="@Display.Svg(py)" />
+                    }
+                </g>
+                @AxisLabel(bandX + Band / 2, bar.Label)
+            }
+
+            <line class="viz-baseline" x1="@Display.Svg(Left)" x2="@Display.Svg(Width - Right)" y1="@Display.Svg(Top + PlotHeight)" y2="@Display.Svg(Top + PlotHeight)" />
+        </svg>
+    }
+</div>
+
+@code {
+    // As tall as the dashboard's other charts; the bottom margin fits a category's name on two lines.
+    private const double Width = 720, Height = 170, Left = 64, Right = 8, Top = 8, Bottom = 32;
+    private const double PlotHeight = Height - Top - Bottom;
+    private const double MaxBarWidth = 28;
+
+    /// <summary>The year's months so far, from <c>GetBudgetMonthsAsync</c>; null while loading.</summary>
+    [Parameter] public IReadOnlyList<BudgetMonth>? Months { get; set; }
+
+    [Parameter] public int Year { get; set; }
+
+    /// <summary>The month compared (Month view).</summary>
+    [Parameter] public int Month { get; set; }
+
+    /// <summary>Each line's whole budget against the year so far, rather than a month against its share.</summary>
+    [Parameter] public bool Yearly { get; set; }
+
+    [Parameter] public string? Title { get; set; }
+
+    /// <summary>Beside the title: the Month / Year switch.</summary>
+    [Parameter] public RenderFragment? HeaderContent { get; set; }
+
+    /// <summary>Shown in place of the chart (loading, or an error).</summary>
+    [Parameter] public string? Message { get; set; }
+
+    [Parameter] public bool MessageIsError { get; set; }
+
+    /// <summary>The category (and detail) picked on the dashboard, highlighted.</summary>
+    [Parameter] public (string Category, string? SubCategory)? Selected { get; set; }
+
+    /// <summary>A category was clicked: that one, or null when the picked one was clicked again.</summary>
+    [Parameter] public EventCallback<(string Category, string? SubCategory)?> OnSelect { get; set; }
+
+    /// <summary>A column: a budget line, its budget and spending, and the even pace by today.</summary>
+    private sealed record Bar(BudgetLineAmount Line, string Label, decimal Budget, decimal Spent, decimal? Pace, string Tooltip);
+
+    private List<Bar> _bars = [];
+    private string? _message, _note;
+    private bool _linkToBudget;
+    private decimal _max;
+    private List<decimal> _ticks = [];
+
+    private string When => Yearly ? Year == Periods.Today.Year ? $"{Year} so far" : $"{Year}" : Display.Month(Year, Month);
+
+    private double Band => (Width - Left - Right) / Math.Max(1, _bars.Count);
+    private double BarWidth => Math.Min(MaxBarWidth, Band * 0.55);
+
+    protected override void OnParametersSet()
+    {
+        (_message, _note, _linkToBudget) = (null, null, false);
+        _bars = Months is null ? [] : Yearly ? YearBars(Months) : MonthBars(Months);
+        if (Months is not null && Message is null && _bars.Count == 0)
+        {
+            var yearly = Months.Any(m => m.Year == Year && m.Lines.Any(l => l.Yearly));
+            _message = yearly && !Yearly ? $"Only yearly budgets are set for {Year}: switch to Year." : $"No budget set for {Year} yet.";
+            _linkToBudget = !yearly || Yearly;
+        }
+
+        // Shares of each budget: up to 100%, or past it to fit the most overspent, in at most six steps.
+        var peak = Math.Max(1, _bars.Count == 0 ? 0 : _bars.Max(b => b.Spent / b.Budget));
+        var step = new[] { 0.25m, 0.5m, 1m, 2m, 5m, 10m, 25m }.FirstOrDefault(s => Math.Ceiling(peak / s) <= 6, 50m);
+        _max = Math.Ceiling(peak / step) * step;
+        _ticks = Enumerable.Range(0, (int)(_max / step) + 1).Select(i => step * i).ToList();
+    }
+
+    private List<Bar> MonthBars(IReadOnlyList<BudgetMonth> months)
+    {
+        if (months.FirstOrDefault(m => m.Year == Year && m.Month == Month) is not { } month) return [];
+        var today = Periods.Today;
+        var underWay = Year == today.Year && Month == today.Month;
+        var share = underWay ? (decimal)today.Day / DateTime.DaysInMonth(Year, Month) : (decimal?)null;
+        var bars = Bars(month.Lines.Where(l => !l.Nested && !l.Yearly), share, month.Unbudgeted, month.Uncategorized);
+        if (month.Lines.Any(l => l.Yearly && !l.Nested)) _note = _note is null ? "Yearly budgets under Year" : $"{_note} · yearly budgets under Year";
+        return bars;
+    }
+
+    private List<Bar> YearBars(IReadOnlyList<BudgetMonth> months)
+    {
+        var year = months.Where(m => m.Year == Year).ToList();
+        if (year.Count == 0) return [];
+        var today = Periods.Today;
+        var share = Year == today.Year ? (decimal)today.DayOfYear / (DateTime.IsLeapYear(Year) ? 366 : 365) : (decimal?)null;
+        // Each line's whole budget (a month's twelfth times 12) and the year's spending on it.
+        var lines = year.SelectMany(m => m.Lines.Where(l => !l.Nested))
+            .GroupBy(l => (l.Category, l.SubCategory))
+            .Select(g => g.First() with { Budget = g.Average(l => l.Budget) * 12, Spent = g.Sum(l => l.Spent) });
+        return Bars(lines, share, year.Sum(m => m.Unbudgeted), year.Sum(m => m.Uncategorized));
+    }
+
+    /// <summary>A column per line, the largest budget first, then the spending no budget covers.</summary>
+    private List<Bar> Bars(IEnumerable<BudgetLineAmount> lines, decimal? share, decimal unbudgeted, decimal uncategorized)
+    {
+        var bars = lines
+            .Where(l => l.Budget > 0)
+            .OrderByDescending(l => l.Budget)
+            .Select(l =>
+            {
+                var pace = share * l.Budget;
+                var label = Categories.Label(l.Category, l.SubCategory);
+                return new Bar(l, l.SubCategory ?? l.Category, l.Budget, l.Spent, pace, $"{label}, {When}: {BudgetBars.Status(l.Budget, l.Spent, pace)}");
+            })
+            .ToList();
+        if (unbudgeted + uncategorized > 0) _note = $"{Money.FormatWhole(unbudgeted + uncategorized)} spent without a budget";
+        return bars;
+    }
+
+    private double Y(decimal value) => Top + PlotHeight - (double)(_max == 0 ? 0 : value / _max) * PlotHeight;
+
+    /// <summary>
+    /// A category's name under its column: on two lines when it's long ("Food &amp;" over "Dining"), each
+    /// cut short with "…" to fit the column's width.
+    /// </summary>
+    private MarkupString AxisLabel(double x, string name)
+    {
+        var fit = Math.Max(4, (int)(Band / 6.2));
+        var lines = name.Length <= fit ? [name] : Split(name);
+        string Cut(string s) => s.Length <= fit ? s : s[..(fit - 1)].TrimEnd() + "…";
+        var spans = string.Concat(lines.Take(2).Select((line, i) =>
+            $"<tspan x=\"{Display.Svg(x)}\" dy=\"{(i == 0 ? 0 : 12)}\">{System.Net.WebUtility.HtmlEncode(Cut(line))}</tspan>"));
+        return new($"<text class=\"viz-axis\" x=\"{Display.Svg(x)}\" y=\"{Display.Svg(Top + PlotHeight + 14)}\" text-anchor=\"middle\">{spans}</text>");
+
+        static string[] Split(string name)
+        {
+            var amp = name.IndexOf(" & ", StringComparison.Ordinal);
+            if (amp > 0) return [name[..(amp + 2)], name[(amp + 3)..]];
+            var space = name.LastIndexOf(' ', name.Length / 2 + 1);
+            if (space < 0) space = name.IndexOf(' ');
+            return space > 0 ? [name[..space], name[(space + 1)..]] : [name];
+        }
+    }
+
+    private Task Select(Bar bar) =>
+        OnSelect.HasDelegate
+            ? OnSelect.InvokeAsync(Selected is { } s && s.Category == bar.Line.Category && s.SubCategory == bar.Line.SubCategory ? null : (bar.Line.Category, bar.Line.SubCategory))
+            : Task.CompletedTask;
+
+    private Task SelectOnEnter(KeyboardEventArgs e, Bar bar) => e.Key is "Enter" or " " ? Select(bar) : Task.CompletedTask;
+}

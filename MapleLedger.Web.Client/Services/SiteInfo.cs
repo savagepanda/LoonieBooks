@@ -17,4 +17,7 @@ public static class SiteInfo
 
     /// <summary>The latest Windows download, offered by the static site (the browser demo).</summary>
     public const string WindowsDownloadUrl = "https://github.com/savagepanda/LoonieBooks/releases/latest";
+
+    /// <summary>The privacy page on the project's website: what's kept where, and what's fetched from other sites.</summary>
+    public const string PrivacyUrl = "https://looniebooks.ca/privacy";
 }
